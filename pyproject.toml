@@ -1,0 +1,34 @@
+[project]
+name = "spotify-automation"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Your Name",email = "you@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "spotipy (>=2.25.2,<3.0.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)",
+    "requests (>=2.32.3,<3.0.0)",
+    "pytest (>=9.0.2,<10.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+packages = [{ include = "src" }]
+include = [
+    { path = "src/db/sql/*.sql" }
+]
+
+[tool.poetry.scripts]
+spotify = "src.main:main"
+token = "src.token_cli:main"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.2"
+types-requests = "^2.32.0"
