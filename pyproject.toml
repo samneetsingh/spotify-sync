@@ -1,20 +1,3 @@
-[project]
-name = "spotify-automation"
-version = "0.1.0"
-description = ""
-authors = [
-    {name = "Your Name",email = "you@example.com"}
-]
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "spotipy (>=2.25.2,<3.0.0)",
-    "python-dotenv (>=1.2.1,<2.0.0)",
-    "requests (>=2.32.3,<3.0.0)",
-    "pytest (>=9.0.2,<10.0.0)"
-]
-
-
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
@@ -23,7 +6,8 @@ build-backend = "poetry.core.masonry.api"
 name = "spotify-automation"
 version = "0.1.0"
 description = "Spotify automation + local analytics DB"
-authors = ["Sam Singh"]
+authors = ["Sam Singh <owner@example.com>"]
+readme = "README.md"
 packages = [{ include = "src" }]
 include = [
     { path = "src/db/sql/*.sql" }
@@ -33,6 +17,12 @@ include = [
 spotify = "src.main:main"
 token = "src.token_cli:main"
 
+[tool.poetry.dependencies]
+python = "^3.12"
+spotipy = "^2.25.2"
+python-dotenv = "^1.2.1"
+requests = "^2.32.3"
+
 [tool.poetry.group.dev.dependencies]
-pytest = "^9.0.2"
+pytest = "^8.0.0"
 types-requests = "^2.32.0"
