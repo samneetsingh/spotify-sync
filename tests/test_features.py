@@ -25,10 +25,15 @@ def _cfg(tmp_path) -> AppConfig:
             client_id="id",
             client_secret="secret",
             redirect_uri="https://example.com/callback",
-            scope="user-read-recently-played playlist-modify-private",
+            scope="user-read-recently-played playlist-modify-private user-library-modify user-library-read",
             all_playlist_id="playlist123",
+            frequent_playlist_id=None,
+            frequent_min_plays=2,
+            like_batch_size=50,
             cache_path=str(tmp_path / ".cache"),
         ),
+        log_level="DEBUG",
+        like_batch_size=50,
     )
 
 
