@@ -20,6 +20,10 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
+name = "spotify-automation"
+version = "0.1.0"
+description = "Spotify automation + local analytics DB"
+authors = ["Sam Singh"]
 packages = [{ include = "src" }]
 include = [
     { path = "src/db/sql/*.sql" }
