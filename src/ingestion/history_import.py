@@ -57,8 +57,13 @@ def _parse_record(record: dict) -> tuple[HistoryPlayRow | None, HistoryTrackRow 
     track_name = record.get("master_metadata_track_name") or record.get("trackName")
     album_name = record.get("master_metadata_album_album_name")
     artist_name = record.get("master_metadata_album_artist_name") or record.get("artistName")
-    explicit_flag = record.get("explicit") or record.get("is_explicit")
-    explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
+    explicit_int = None
+    if "explicit" in record:
+        explicit_flag = record.get("explicit")
+        explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
+    elif "is_explicit" in record:
+        explicit_flag = record.get("is_explicit")
+        explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
 
     track_row: HistoryTrackRow = (
         track_id,
@@ -66,7 +71,7 @@ def _parse_record(record: dict) -> tuple[HistoryPlayRow | None, HistoryTrackRow 
         track_name,
         artist_name,
         album_name,
-        record.get("ms_played") if isinstance(record.get("ms_played"), int) else None,
+        None,
         explicit_int,
     )
     play_row: HistoryPlayRow = (
@@ -81,29 +86,80 @@ def _parse_record(record: dict) -> tuple[HistoryPlayRow | None, HistoryTrackRow 
 
 
 def _load_records(path: Path) -> Iterable[dict]:
-    text = path.read_text(encoding="utf-8")
-    try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return [data]
-    except json.JSONDecodeError:
-        pass
+    """
+    Yield JSON records without loading the entire file into memory.
+    Supports:
+      - Array of objects: [ {...}, {...} ]
+      - Single object
+      - Newline-delimited JSON (one object per line)
+    """
+    decoder = json.JSONDecoder()
+    with path.open("r", encoding="utf-8") as f:
+        # Peek first non-whitespace char to decide strategy
+        start_pos = f.tell()
+        first = ""
+        while True:
+            ch = f.read(1)
+            if not ch or not ch.isspace():
+                first = ch or ""
+                break
+        f.seek(start_pos)
 
-    # Try newline-delimited JSON
-    records: List[dict] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-            if isinstance(obj, dict):
-                records.append(obj)
-        except json.JSONDecodeError:
-            continue
-    return records
+        if first == "[":
+            buffer = ""
+            in_array = False
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                buffer += chunk
+                while True:
+                    buffer = buffer.lstrip()
+                    if not buffer:
+                        break
+                    if not in_array:
+                        if buffer[0] == "[":
+                            in_array = True
+                            buffer = buffer[1:]
+                            continue
+                        # not an array, fall back to object
+                        break
+                    if buffer.startswith("]"):
+                        return
+                    if buffer.startswith(","):
+                        buffer = buffer[1:]
+                        continue
+                    try:
+                        obj, idx = decoder.raw_decode(buffer)
+                    except json.JSONDecodeError:
+                        # Need more data
+                        break
+                    if isinstance(obj, dict):
+                        yield obj
+                    buffer = buffer[idx:]
+            return
+
+        if first == "{":
+            try:
+                obj = json.load(f)
+                if isinstance(obj, dict):
+                    yield obj
+                    return
+            except json.JSONDecodeError:
+                pass
+            f.seek(start_pos)
+
+        # Fallback: newline-delimited JSON
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    yield obj
+            except json.JSONDecodeError:
+                continue
 
 
 def import_history_file(cfg: AppConfig, db: DB, path: str) -> ImportResult:
@@ -116,12 +172,13 @@ def import_history_file(cfg: AppConfig, db: DB, path: str) -> ImportResult:
     if not p.exists():
         raise FileNotFoundError(path)
 
-    records = list(_load_records(p))
     plays: List[HistoryPlayRow] = []
     tracks: List[HistoryTrackRow] = []
     skipped = 0
+    records_seen = 0
 
-    for rec in records:
+    for rec in _load_records(p):
+        records_seen += 1
         play_row, track_row = _parse_record(rec)
         if play_row is None or track_row is None:
             skipped += 1
@@ -135,7 +192,7 @@ def import_history_file(cfg: AppConfig, db: DB, path: str) -> ImportResult:
     log.info(
         "Imported history file %s | records=%s plays_written=%s tracks_written=%s skipped=%s",
         path,
-        len(records),
+        records_seen,
         len(plays),
         len(tracks),
         skipped,
@@ -144,7 +201,7 @@ def import_history_file(cfg: AppConfig, db: DB, path: str) -> ImportResult:
         files_processed=1,
         plays_written=len(plays),
         tracks_written=len(tracks),
-        records_seen=len(records),
+        records_seen=records_seen,
         records_skipped=skipped,
     )
 

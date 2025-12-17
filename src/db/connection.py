@@ -11,9 +11,23 @@ from .schema import MIGRATIONS, SCHEMA_VERSION
 class DB:
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        path = Path(db_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure database and parent dir are private to the current user
+        try:
+            path.parent.chmod(0o700)
+        except Exception:
+            pass
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
+        # Enforce relational integrity and prefer WAL for concurrent reads
+        self.conn.execute("PRAGMA foreign_keys=ON;")
+        self.conn.execute("PRAGMA journal_mode=WAL;")
+        try:
+            if path.exists():
+                path.chmod(0o600)
+        except Exception:
+            pass
 
     def close(self) -> None:
         self.conn.close()

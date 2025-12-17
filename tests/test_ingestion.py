@@ -1,26 +1,42 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 
 import pytest
 
 from src.config import AppConfig, DbConfig, SpotifyConfig
 from src.db.connection import DB
-from src.db import queries
+from src.db import queries, state
 from src.ingestion.sync_recent import sync_recent, sync_all_tracks
 from src.utils.time import iso8601_to_ms
 
 
 class FakeSpotify:
-    def __init__(self, payload: dict, *, playlist_total: int | None = None) -> None:
-        self.payload = payload
+    def __init__(
+        self,
+        payload: dict | None = None,
+        *,
+        playlist_total: int | None = None,
+        pages: dict[int, dict] | None = None,
+        raise_on_call: bool = False,
+        playlist_items_payload: dict | None = None,
+    ) -> None:
+        self.payload = payload or {}
+        self.pages = pages or {}
         self.add_calls: list[dict] = []
         self.saved_calls: list[list[str]] = []
         self.recently_played_args: list[dict] = []
         self.playlist_total = playlist_total
+        self.raise_on_call = raise_on_call
+        self.playlist_items_payload = playlist_items_payload or {"items": [], "next": None}
 
     def current_user_recently_played(self, *, limit: int, after: int) -> dict:
+        if self.raise_on_call:
+            raise RuntimeError("boom")
         self.recently_played_args.append({"limit": limit, "after": after})
+        if self.pages:
+            return self.pages.get(after, {})
         return self.payload
 
     def playlist_add_items(self, playlist_id: str, items: list[str]) -> dict:
@@ -35,6 +51,15 @@ class FakeSpotify:
         if self.playlist_total is None:
             return {"tracks": {"total": 0}}
         return {"tracks": {"total": self.playlist_total}}
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        fields: str | None = None,
+    ) -> dict:
+        return self.playlist_items_payload
 
 
 def make_config(tmp_path) -> AppConfig:
@@ -200,6 +225,60 @@ def test_sync_recent_skips_known_playlist_tracks(tmp_path) -> None:
     # liked already cached; playlist mirror should still be blocked because also cached? not cached for playlist
     assert fake.saved_calls == []
     assert fake.add_calls == []
+    db.close()
+
+
+def test_sync_recent_paginates(tmp_path) -> None:
+    cfg = replace(make_config(tmp_path), recently_played_limit=1)
+    db = DB(cfg.db.path)
+    db.migrate()
+    state.save_cursor_ms(db, cfg.spotify.all_playlist_id, 0)
+
+    first_play = _play_item("2024-01-01T00:00:00Z", "t1", "spotify:track:1")
+    second_play = _play_item("2024-01-01T00:05:00Z", "t2", "spotify:track:2")
+    ms1 = iso8601_to_ms(first_play["played_at"])
+    pages = {
+        0: {"items": [first_play]},
+        ms1: {"items": [second_play]},
+    }
+    fake = FakeSpotify(pages=pages)
+
+    result = sync_recent(cfg, db, fake)
+    assert result.plays_fetched == 2
+    assert len(fake.recently_played_args) >= 2
+    assert {row["track_id"] for row in db.fetchall("SELECT track_id FROM tracks")} == {"t1", "t2"}
+    db.close()
+
+
+def test_sync_recent_records_failure(tmp_path) -> None:
+    cfg = make_config(tmp_path)
+    db = DB(cfg.db.path)
+    db.migrate()
+
+    fake = FakeSpotify(raise_on_call=True)
+    with pytest.raises(RuntimeError):
+        sync_recent(cfg, db, fake)
+
+    row = db.fetchone("SELECT status, error FROM sync_runs ORDER BY id DESC LIMIT 1")
+    assert row is not None
+    assert row["status"] == "fail"
+    assert "boom" in row["error"]
+    db.close()
+
+
+def test_sync_recent_respects_capacity(tmp_path) -> None:
+    cfg = make_config(tmp_path)
+    db = DB(cfg.db.path)
+    db.migrate()
+    state.save_cursor_ms(db, cfg.spotify.all_playlist_id, 0)
+
+    payload = {"items": [_play_item("2024-01-01T00:00:00Z", "t1", "spotify:track:1")]}
+    fake = FakeSpotify(payload, playlist_total=10_000)
+
+    result = sync_recent(cfg, db, fake)
+    assert result.playlist_added == 0
+    assert fake.add_calls == []
+    assert fake.saved_calls and fake.saved_calls[0] == ["t1"]
     db.close()
 
 

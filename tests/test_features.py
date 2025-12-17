@@ -12,10 +12,20 @@ from src.features.yearly_playlists import build_yearly_playlist
 class FakeSpotify:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.playlist_items_payload = {"items": [], "next": None}
 
     def playlist_add_items(self, playlist_id: str, items: list[str]) -> dict:
         self.calls.append({"playlist_id": playlist_id, "items": list(items)})
         return {}
+
+    def playlist_items(
+        self,
+        playlist_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        fields: str | None = None,
+    ) -> dict:
+        return self.playlist_items_payload
 
 
 def _cfg(tmp_path) -> AppConfig:

@@ -7,6 +7,7 @@ from typing import Iterable, List
 from src.config import AppConfig
 from src.db import queries
 from src.db.connection import DB
+from src.ingestion.backfill_playlist import backfill_playlist_cache
 from src.ingestion.spotify_client import SpotifyClient
 from src.utils.batching import chunk_list
 
@@ -36,6 +37,8 @@ def build_yearly_playlist(
         raise RuntimeError("Spotify credentials not configured.")
     if cfg.add_batch_size <= 0:
         raise ValueError("add_batch_size must be positive")
+
+    backfill_playlist_cache(cfg, db, spotify, playlist_id=playlist_id)
 
     start = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
     end = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)

@@ -13,10 +13,28 @@ if [[ -z "${POETRY_BIN}" ]]; then
   exit 1
 fi
 
+FLOCK_BIN="$(command -v flock || true)"
+LOGGER_BIN="$(command -v logger || true)"
+
 # Ensure logs directory exists
 mkdir -p "${PROJECT_DIR}/data/logs"
+chmod 700 "${PROJECT_DIR}/data" "${PROJECT_DIR}/data/logs" 2>/dev/null || true
 
-CRON_LINE="*/10 * * * * cd ${PROJECT_DIR} && /usr/bin/flock -n /tmp/spotify-automation.lock ${POETRY_BIN} run spotify sync >> data/logs/cron.log 2>&1"
+LOCK_CMD=""
+if [[ -n "${FLOCK_BIN}" ]]; then
+  LOCK_CMD="${FLOCK_BIN} -n /tmp/spotify-automation.lock "
+else
+  echo "WARN: flock not found; cron job will run without a lock."
+fi
+
+LOG_PIPE=""
+if [[ -n "${LOGGER_BIN}" ]]; then
+  LOG_PIPE="| ${LOGGER_BIN} -t spotify-automation"
+else
+  LOG_PIPE=">> \"${PROJECT_DIR}/data/logs/cron.log\""
+fi
+
+CRON_LINE="*/10 * * * * cd \"${PROJECT_DIR}\" && ${LOCK_CMD}${POETRY_BIN} run spotify sync 2>&1 ${LOG_PIPE}"
 
 # Install cron job (idempotent)
 (

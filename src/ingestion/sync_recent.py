@@ -11,11 +11,12 @@ from src.db.connection import DB
 from src.db import queries, state
 from src.ingestion.spotify_client import SpotifyClient
 from src.utils.batching import chunk_list
-from src.utils.time import iso8601_to_ms
+from src.utils.time import iso8601_to_ms, now_ms
 
 log = logging.getLogger("sync_recent")
 
 LIKED_CACHE_ID = "__liked__"
+_CACHE_REFRESH_HOURS = 24
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,23 @@ def _add_to_liked(sp: SpotifyClient, track_ids: list[str], batch_size: int) -> i
     return added
 
 
+def _maybe_refresh_playlist_cache(cfg: AppConfig, db: DB, sp: SpotifyClient, playlist_id: str, *, max_age_hours: int) -> None:
+    key = f"playlist_cache_refreshed_ms:{playlist_id}"
+    last = state.get_state(db, key)
+    now = now_ms()
+    if last is not None:
+        try:
+            if now - int(last) < max_age_hours * 60 * 60 * 1000:
+                return
+        except ValueError:
+            pass
+    # Lazy import to avoid cycle
+    from src.ingestion.backfill_playlist import backfill_playlist_cache
+
+    backfill_playlist_cache(cfg, db, sp, playlist_id=playlist_id)
+    state.set_state(db, key, str(now))
+
+
 def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
     """
     Pull recent plays, persist to DB, and backfill the all-playlist.
@@ -124,13 +142,45 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
     liked_added = 0
     frequent_added = 0
     cursor_out: int | None = None
+    tracks_added_total = 0
 
     try:
-        resp = sp.current_user_recently_played(
-            limit=cfg.recently_played_limit,
-            after=cursor_in,
-        ) or {}
-        plays_rows, track_rows, newest_ms = _parse_recently_played(resp)
+        _maybe_refresh_playlist_cache(cfg, db, sp, playlist_id, max_age_hours=_CACHE_REFRESH_HOURS)
+        if cfg.spotify.frequent_playlist_id:
+            _maybe_refresh_playlist_cache(
+                cfg,
+                db,
+                sp,
+                cfg.spotify.frequent_playlist_id,
+                max_age_hours=_CACHE_REFRESH_HOURS,
+            )
+
+        # Fetch pages until we exhaust results to avoid dropping plays when > limit
+        combined_plays: List[tuple] = []
+        combined_tracks: dict[str, tuple] = {}
+        cursor_marker = cursor_in
+        newest_ms = 0
+        while True:
+            resp = sp.current_user_recently_played(
+                limit=cfg.recently_played_limit,
+                after=cursor_marker,
+            ) or {}
+            plays_rows, track_rows, batch_newest = _parse_recently_played(resp)
+            if not plays_rows:
+                break
+            combined_plays.extend(plays_rows)
+            for row in track_rows:
+                combined_tracks[row[0]] = row  # keyed by track_id
+            newest_ms = max(newest_ms, batch_newest)
+            if len(resp.get("items") or []) < cfg.recently_played_limit:
+                break
+            if batch_newest <= cursor_marker:
+                # Defensive: avoid infinite loop if API repeats the last item
+                break
+            cursor_marker = batch_newest
+
+        plays_rows = combined_plays
+        track_rows = list(combined_tracks.values())
         plays_fetched = len(plays_rows)
 
         queries.upsert_tracks(db, track_rows)
@@ -142,6 +192,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
         if liked_missing:
             liked_added = _add_to_liked(sp, [tid for (tid, _uri) in liked_missing], cfg.like_batch_size)
             queries.mark_tracks_in_playlist(db, LIKED_CACHE_ID, liked_missing)
+            tracks_added_total += liked_added
 
         # Frequent playlist (optional)
         if cfg.spotify.frequent_playlist_id:
@@ -153,6 +204,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
                 use_full_history=False,
                 recent_track_ids=[tid for (tid, _uri, *_rest) in track_rows],
             )
+            tracks_added_total += frequent_added
 
         # Legacy all-playlist cache (keep as a mirror for dedupe; optional use)
         known_ids = queries.get_known_playlist_track_ids(db, playlist_id)
@@ -160,8 +212,25 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
         to_add_uris = [uri for (_tid, uri) in to_add]
 
         if to_add_uris:
-            playlist_added = _add_to_playlist(sp, playlist_id, to_add_uris, cfg.add_batch_size)
-            queries.mark_tracks_in_playlist(db, playlist_id, to_add)
+            capacity = _remaining_capacity(sp, playlist_id)
+            if capacity is not None and capacity <= 0:
+                log.warning("All-playlist at capacity; skipping additions.")
+            else:
+                if capacity is not None and len(to_add_uris) > capacity:
+                    log.warning("All-playlist near capacity; truncating to %s items", capacity)
+                    to_add = to_add[:capacity]
+                    to_add_uris = to_add_uris[:capacity]
+                try:
+                    playlist_added = _add_to_playlist(sp, playlist_id, to_add_uris, cfg.add_batch_size)
+                except SpotifyException as exc:
+                    if exc.http_status == 400 and "Playlist size limit" in exc.msg:
+                        log.error("All-playlist size limit reached; skipping additions.")
+                        playlist_added = 0
+                    else:
+                        raise
+                if playlist_added:
+                    queries.mark_tracks_in_playlist(db, playlist_id, to_add)
+                tracks_added_total += playlist_added
 
         if newest_ms > 0:
             cursor_out = newest_ms + 1
@@ -172,7 +241,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
             run_id,
             cursor_out_ms=cursor_out,
             plays_fetched=plays_fetched,
-            tracks_added=playlist_added + liked_added + frequent_added,
+            tracks_added=tracks_added_total,
             status="success",
         )
         log.info(
@@ -198,7 +267,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
             run_id,
             cursor_out_ms=cursor_out,
             plays_fetched=plays_fetched,
-            tracks_added=tracks_added,
+            tracks_added=tracks_added_total,
             status="fail",
             error=str(exc),
         )

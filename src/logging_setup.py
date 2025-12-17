@@ -21,6 +21,18 @@ def setup_logging(level: str = "INFO", log_file: str | None = None, retention_da
     if log_file:
         path = Path(log_file).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.parent.chmod(0o700)
+        except Exception:
+            pass
+        # Pre-create log file with restrictive permissions so rotating handler
+        # does not leave world-readable logs.
+        try:
+            if not path.exists():
+                path.touch(mode=0o600, exist_ok=True)
+            path.chmod(0o600)
+        except Exception:
+            pass
         file_handler = TimedRotatingFileHandler(
             filename=str(path),
             when="midnight",

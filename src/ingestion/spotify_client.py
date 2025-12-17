@@ -32,7 +32,17 @@ def get_spotify(cfg: SpotifyConfig) -> SpotifyClient:
     Build a Spotipy client using OAuth + on-disk token cache.
     """
     cache_path = str(Path(cfg.cache_path).expanduser())
-    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+    cache_file = Path(cache_path)
+    cache_dir = cache_file.parent
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_dir.chmod(0o700)
+        if not cache_file.exists():
+            cache_file.touch(mode=0o600, exist_ok=True)
+        cache_file.chmod(0o600)
+    except Exception:
+        # Best-effort; if chmod fails we still proceed.
+        pass
     auth_manager = SpotifyOAuth(
         client_id=cfg.client_id,
         client_secret=cfg.client_secret,

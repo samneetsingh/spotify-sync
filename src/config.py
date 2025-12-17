@@ -7,8 +7,12 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Load only the repo-local .env to avoid accidentally picking up
+# env files from unrelated working directories.
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT_DIR / ".env")
 
 
 class ConfigError(RuntimeError):
@@ -63,6 +67,12 @@ def _int_env(name: str, default: int) -> int:
         raise ConfigError(f"{name} must be an integer") from exc
 
 
+def _positive_int(name: str, value: int, *, minimum: int = 1) -> int:
+    if value < minimum:
+        raise ConfigError(f"{name} must be >= {minimum}")
+    return value
+
+
 def _load_spotify_config() -> SpotifyConfig:
     redirect_uri = _required_env("SPOTIFY_REDIRECT_URI")
     parsed = urlparse(redirect_uri)
@@ -92,8 +102,8 @@ def _load_spotify_config() -> SpotifyConfig:
         ),
         all_playlist_id=_required_env("SPOTIFY_ALL_PLAYLIST_ID"),
         frequent_playlist_id=os.getenv("SPOTIFY_FREQUENT_PLAYLIST_ID"),
-        frequent_min_plays=_int_env("FREQUENT_MIN_PLAYS", 2),
-        like_batch_size=_int_env("LIKE_BATCH_SIZE", 50),
+        frequent_min_plays=_positive_int("FREQUENT_MIN_PLAYS", _int_env("FREQUENT_MIN_PLAYS", 2)),
+        like_batch_size=_positive_int("LIKE_BATCH_SIZE", _int_env("LIKE_BATCH_SIZE", 50)),
         cache_path=os.getenv("SPOTIFY_TOKEN_CACHE_PATH", "data/.spotify_token_cache.json"),
     )
 
@@ -116,10 +126,13 @@ def load_config(*, require_spotify: bool = True) -> AppConfig:
         db=db_cfg,
         spotify=spotify_cfg,
         log_level=os.getenv("LOG_LEVEL", "INFO"),
-        bootstrap_hours=_int_env("BOOTSTRAP_HOURS", 24),
-        recently_played_limit=_int_env("RECENTLY_PLAYED_LIMIT", 50),
-        add_batch_size=_int_env("PLAYLIST_ADD_BATCH_SIZE", 100),
-        like_batch_size=_int_env("LIKE_BATCH_SIZE", 50),
+        bootstrap_hours=_positive_int("BOOTSTRAP_HOURS", _int_env("BOOTSTRAP_HOURS", 24)),
+        recently_played_limit=min(
+            50,
+            _positive_int("RECENTLY_PLAYED_LIMIT", _int_env("RECENTLY_PLAYED_LIMIT", 50)),
+        ),
+        add_batch_size=_positive_int("PLAYLIST_ADD_BATCH_SIZE", _int_env("PLAYLIST_ADD_BATCH_SIZE", 100)),
+        like_batch_size=_positive_int("LIKE_BATCH_SIZE", _int_env("LIKE_BATCH_SIZE", 50)),
         log_file=os.getenv("LOG_FILE", "data/logs/spotify.log"),
-        log_retention_days=_int_env("LOG_RETENTION_DAYS", 7),
+        log_retention_days=_positive_int("LOG_RETENTION_DAYS", _int_env("LOG_RETENTION_DAYS", 7)),
     )
