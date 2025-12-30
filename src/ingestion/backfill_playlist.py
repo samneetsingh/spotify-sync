@@ -21,20 +21,33 @@ class BackfillResult:
 
 
 def _fetch_playlist_items(sp: SpotifyClient, playlist_id: str, limit: int = 100) -> Iterable[dict]:
-    offset = 0
-    while True:
-        resp = sp.playlist_items(
-            playlist_id,
-            limit=limit,
-            offset=offset,
-            fields="items(track(id,uri,name,album(name),artists(name),duration_ms,explicit)),next",
-        )
-        items = resp.get("items") or []
-        for item in items:
-            yield item
-        if not resp.get("next"):
-            break
-        offset += limit
+    # Special case: __liked__ means use saved tracks API (max limit: 50)
+    if playlist_id == "__liked__":
+        offset = 0
+        liked_limit = min(limit, 50)  # Spotify's saved tracks API has max limit of 50
+        while True:
+            resp = sp.current_user_saved_tracks(limit=liked_limit, offset=offset)
+            items = resp.get("items") or []
+            for item in items:
+                yield item
+            if not resp.get("next"):
+                break
+            offset += limit
+    else:
+        offset = 0
+        while True:
+            resp = sp.playlist_items(
+                playlist_id,
+                limit=limit,
+                offset=offset,
+                fields="items(track(id,uri,name,album(name),artists(name),duration_ms,explicit)),next",
+            )
+            items = resp.get("items") or []
+            for item in items:
+                yield item
+            if not resp.get("next"):
+                break
+            offset += limit
 
 
 def _add_to_playlist(sp: SpotifyClient, playlist_id: str, uris: Iterable[str], batch_size: int) -> None:

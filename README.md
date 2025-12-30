@@ -7,7 +7,7 @@ Local-first ingestion of your Spotify recently played feed into SQLite, plus an 
 - Spotify app with OAuth credentials:
   - Redirect URI should be HTTPS (e.g., `https://example.com/callback`). Plain `http` is only allowed for explicit loopback IPs like `http://127.0.0.1:PORT` or `http://[::1]:PORT` (not `localhost`). Add the URI to the Spotify app settings.
   - Set env vars: `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`, `SPOTIFY_ALL_PLAYLIST_ID` (used for cursor key + legacy mirror).
-- Optional envs: `SPOTIFY_SCOPE` (default includes `user-library-modify`, `user-library-read`, `playlist-modify-private`, `user-read-recently-played`), `SPOTIFY_TOKEN_CACHE_PATH` (`data/.spotify_token_cache.json`), `SPOTIFY_FREQUENT_PLAYLIST_ID` (playlist for frequent songs), `FREQUENT_MIN_PLAYS` (default `2`), `DB_PATH` (`data/spotify.db`), `LOG_LEVEL`.
+- Optional envs: `SPOTIFY_SCOPE` (default includes `user-library-modify`, `user-library-read`, `playlist-modify-private`, `user-read-recently-played`), `SPOTIFY_TOKEN_CACHE_PATH` (`data/.spotify_token_cache.json`), `SPOTIFY_FREQUENT_PLAYLIST_ID` (playlist for frequent songs), `FREQUENT_MIN_PLAYS` (default `2`), `DB_LOCAL_PATH` (`data/spotify.db`), `LOG_LEVEL`.
   Logging: `LOG_FILE` (default `data/logs/spotify.log`), `LOG_RETENTION_DAYS` (default `7`).
 
 Copy `.env.example` (or create `.env`) with the above values; `python-dotenv` will load it.
@@ -57,7 +57,7 @@ poetry run spotify backfill-playlist-cache
 poetry run spotify import-history path/to/history.json
 poetry run spotify import-history path/to/history_folder
 ```
-`migrate` only needs `DB_PATH`. `sync` requires all Spotify env vars plus a valid token cache.
+`migrate` only needs `DB_LOCAL_PATH`. `sync` requires all Spotify env vars plus a valid token cache.
 
 ### Scheduling
 Run `sync` every 10–15 minutes via cron/systemd/containers/n8n. Example cron:
