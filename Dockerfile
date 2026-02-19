@@ -1,7 +1,7 @@
 FROM python:3.12-alpine AS builder
 
 RUN apk add --no-cache build-base libffi-dev
-RUN pip install --no-cache-dir poetry==2.1.1 poetry-plugin-export
+RUN pip install --no-cache-dir poetry==2.1.3 poetry-plugin-export
 
 WORKDIR /app
 COPY pyproject.toml poetry.lock ./
