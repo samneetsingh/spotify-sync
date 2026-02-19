@@ -8,11 +8,6 @@ __pycache__/
 .eggs/
 .pytest_cache/
 
-# ---------- Poetry ----------
-.poetry/
-.poetry.lock
-poetry.lock
-
 # ---------- Virtualenv ----------
 .venv/
 env/
