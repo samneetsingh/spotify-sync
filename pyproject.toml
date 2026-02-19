@@ -10,7 +10,8 @@ authors = ["Sam Singh <owner@example.com>"]
 readme = "README.md"
 packages = [{ include = "src" }]
 include = [
-    { path = "src/db/sql/*.sql" }
+    { path = "src/db/sql/*.sql" },
+    { path = "src/config/config.yaml" }
 ]
 
 [tool.poetry.scripts]
@@ -22,7 +23,17 @@ python = "^3.12"
 spotipy = "^2.25.2"
 python-dotenv = "^1.2.1"
 requests = "^2.32.3"
+pyyaml = "^6.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 types-requests = "^2.32.0"
+
+[tool.pytest.ini_options]
+addopts = "-v --tb=short"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: integration tests requiring multiple modules",
+]

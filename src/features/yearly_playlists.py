@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, List
+from typing import List
 
 from src.config import AppConfig
 from src.db import queries
 from src.db.connection import DB
 from src.ingestion.backfill_playlist import backfill_playlist_cache
 from src.ingestion.spotify_client import SpotifyClient
-from src.utils.batching import chunk_list
+from src.spotify_helpers import add_tracks_to_playlist
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ def build_yearly_playlist(
     *,
     year: int,
     playlist_id: str,
-    top_n: int = 100,
+    top_n: int | None = None,
 ) -> YearlyPlaylistResult:
     """
     Build a year-in-review playlist using plays in the DB for the given year.
@@ -38,34 +38,21 @@ def build_yearly_playlist(
     if cfg.add_batch_size <= 0:
         raise ValueError("add_batch_size must be positive")
 
+    resolved_top_n = top_n if top_n is not None else cfg.yearly_max_tracks
+
     backfill_playlist_cache(cfg, db, spotify, playlist_id=playlist_id)
 
     start = int(datetime(year, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
     end = int(datetime(year + 1, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
-    rows = db.fetchall(
-        """
-        SELECT
-          p.track_id AS track_id,
-          t.track_uri AS track_uri,
-          COUNT(*) AS play_count,
-          MAX(p.played_at_ms) AS last_play_ms
-        FROM plays p
-        JOIN tracks t ON p.track_id = t.track_id
-        WHERE p.played_at_ms >= ? AND p.played_at_ms < ?
-        GROUP BY p.track_id, t.track_uri
-        ORDER BY play_count DESC, last_play_ms DESC
-        LIMIT ?
-        """,
-        (start, end, top_n),
-    )
+    rows = queries.get_yearly_tracks(db, start, end, resolved_top_n)
 
     known = queries.get_known_playlist_track_ids(db, playlist_id)
     to_add: List[tuple[str, str]] = [
         (str(r["track_id"]), str(r["track_uri"])) for r in rows if str(r["track_id"]) not in known
     ]
 
-    tracks_added = _add_to_playlist(spotify, playlist_id, [uri for (_tid, uri) in to_add], cfg.add_batch_size)
+    tracks_added = add_tracks_to_playlist(spotify, playlist_id, [uri for (_tid, uri) in to_add], cfg.add_batch_size)
     if to_add:
         queries.mark_tracks_in_playlist(db, playlist_id, to_add)
 
@@ -75,13 +62,3 @@ def build_yearly_playlist(
         tracks_added=tracks_added,
         tracks_considered=len(rows),
     )
-
-
-def _add_to_playlist(sp: SpotifyClient, playlist_id: str, track_uris: Iterable[str], batch_size: int) -> int:
-    added = 0
-    for batch in chunk_list(track_uris, batch_size):
-        if not batch:
-            continue
-        sp.playlist_add_items(playlist_id, list(batch))
-        added += len(batch)
-    return added

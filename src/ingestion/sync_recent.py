@@ -2,41 +2,43 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
 from spotipy.exceptions import SpotifyException
 
 from src.config import AppConfig
 from src.db.connection import DB
 from src.db import queries, state
+from src.db.queries import PlayRow, TrackRow
 from src.ingestion.spotify_client import SpotifyClient
-from src.utils.batching import chunk_list
+from src.spotify_helpers import (
+    LIKED_CACHE_ID,
+    add_tracks_to_liked,
+    add_tracks_to_playlist,
+    extract_track_metadata,
+)
 from src.utils.time import iso8601_to_ms, now_ms
 
 log = logging.getLogger("sync_recent")
-
-LIKED_CACHE_ID = "__liked__"
-_CACHE_REFRESH_HOURS = 24
 
 
 @dataclass(frozen=True)
 class SyncResult:
     plays_fetched: int
-    playlist_added: int
     liked_added: int
     frequent_added: int
     cursor_in_ms: int
     cursor_out_ms: int | None
 
 
-def _parse_recently_played(resp: dict) -> Tuple[List[tuple], List[tuple], int]:
+def _parse_recently_played(resp: dict) -> Tuple[List[PlayRow], List[TrackRow], int]:
     """
     Parse Spotify recently_played response into rows for DB insertion.
     Returns (plays_rows, tracks_rows, newest_played_at_ms).
     """
     items = resp.get("items") or []
-    plays: List[tuple] = []
-    tracks: List[tuple] = []
+    plays: List[PlayRow] = []
+    tracks: List[TrackRow] = []
     seen_track_ids: set[str] = set()
     newest_ms = 0
 
@@ -51,60 +53,56 @@ def _parse_recently_played(resp: dict) -> Tuple[List[tuple], List[tuple], int]:
         played_at_ms = iso8601_to_ms(played_at)
         newest_ms = max(newest_ms, played_at_ms)
         context = item.get("context") or {}
-        plays.append(
-            (
-                played_at_ms,
-                track_id,
-                track_uri,
-                context.get("type"),
-                context.get("uri"),
-                "recently_played",
-            )
-        )
+        plays.append(PlayRow(
+            played_at_ms=played_at_ms,
+            track_id=track_id,
+            track_uri=track_uri,
+            context_type=context.get("type"),
+            context_uri=context.get("uri"),
+            source="recently_played",
+        ))
 
         if track_id in seen_track_ids:
             continue
         seen_track_ids.add(track_id)
 
         album = track.get("album") or {}
-        artists = track.get("artists") or []
-        artist_names = ", ".join([a.get("name") for a in artists if a.get("name")]) or None
-        explicit_flag = track.get("explicit")
-        explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
+        artist_names, explicit_int = extract_track_metadata(track)
 
-        tracks.append(
-            (
-                track_id,
-                track_uri,
-                track.get("name"),
-                artist_names,
-                album.get("name"),
-                track.get("duration_ms"),
-                explicit_int,
-            )
-        )
+        tracks.append(TrackRow(
+            track_id=track_id,
+            track_uri=track_uri,
+            name=track.get("name"),
+            artists=artist_names,
+            album=album.get("name"),
+            duration_ms=track.get("duration_ms"),
+            explicit=explicit_int,
+        ))
 
     return plays, tracks, newest_ms
 
 
-def _add_to_playlist(sp: SpotifyClient, playlist_id: str, track_uris: list[str], batch_size: int) -> int:
-    added = 0
-    for batch in chunk_list(track_uris, batch_size):
-        if not batch:
-            continue
-        sp.playlist_add_items(playlist_id, batch)
-        added += len(batch)
-    return added
+def _apply_capacity_limit(
+    items: list[tuple[str, str]], capacity: int | None, label: str,
+) -> list[tuple[str, str]]:
+    """Truncate items to fit within remaining playlist capacity. Returns the (possibly truncated) list."""
+    if capacity is not None and len(items) > capacity:
+        log.warning("%s near capacity; truncating to %s items", label, capacity)
+        return items[:capacity]
+    return items
 
 
-def _add_to_liked(sp: SpotifyClient, track_ids: list[str], batch_size: int) -> int:
-    added = 0
-    for batch in chunk_list(track_ids, batch_size):
-        if not batch:
-            continue
-        sp.current_user_saved_tracks_add(batch)
-        added += len(batch)
-    return added
+def _safe_add_to_playlist(
+    sp: SpotifyClient, playlist_id: str, uris: list[str], batch_size: int, label: str,
+) -> int:
+    """Add tracks to a playlist, gracefully handling Spotify's size-limit error."""
+    try:
+        return add_tracks_to_playlist(sp, playlist_id, uris, batch_size)
+    except SpotifyException as exc:
+        if exc.http_status == 400 and "Playlist size limit" in exc.msg:
+            log.error("%s size limit reached; skipping additions.", label)
+            return 0
+        raise
 
 
 def _maybe_refresh_playlist_cache(cfg: AppConfig, db: DB, sp: SpotifyClient, playlist_id: str, *, max_age_hours: int) -> None:
@@ -126,7 +124,7 @@ def _maybe_refresh_playlist_cache(cfg: AppConfig, db: DB, sp: SpotifyClient, pla
 
 def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
     """
-    Pull recent plays, persist to DB, and backfill the all-playlist.
+    Pull recent plays, persist to DB, and sync to liked songs / frequent playlist.
     """
     if cfg.spotify is None:
         raise RuntimeError("Spotify credentials not configured; set SPOTIFY_* env vars.")
@@ -138,21 +136,19 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
     run_id = queries.create_sync_run(db, cursor_in)
 
     plays_fetched = 0
-    playlist_added = 0
     liked_added = 0
     frequent_added = 0
     cursor_out: int | None = None
     tracks_added_total = 0
 
     try:
-        _maybe_refresh_playlist_cache(cfg, db, sp, playlist_id, max_age_hours=_CACHE_REFRESH_HOURS)
         if cfg.spotify.frequent_playlist_id:
             _maybe_refresh_playlist_cache(
                 cfg,
                 db,
                 sp,
                 cfg.spotify.frequent_playlist_id,
-                max_age_hours=_CACHE_REFRESH_HOURS,
+                max_age_hours=cfg.cache_refresh_hours,
             )
 
         # Fetch pages until we exhaust results to avoid dropping plays when > limit
@@ -170,7 +166,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
                 break
             combined_plays.extend(plays_rows)
             for row in track_rows:
-                combined_tracks[row[0]] = row  # keyed by track_id
+                combined_tracks[row.track_id] = row
             newest_ms = max(newest_ms, batch_newest)
             if len(resp.get("items") or []) < cfg.recently_played_limit:
                 break
@@ -188,9 +184,9 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
 
         # Liked songs (primary target)
         liked_known = queries.get_known_playlist_track_ids(db, LIKED_CACHE_ID)
-        liked_missing = [(tid, uri) for (tid, uri, *_rest) in track_rows if tid not in liked_known]
+        liked_missing = [(r.track_id, r.track_uri) for r in track_rows if r.track_id not in liked_known]
         if liked_missing:
-            liked_added = _add_to_liked(sp, [tid for (tid, _uri) in liked_missing], cfg.like_batch_size)
+            liked_added = add_tracks_to_liked(sp, [tid for (tid, _uri) in liked_missing], cfg.like_batch_size)
             queries.mark_tracks_in_playlist(db, LIKED_CACHE_ID, liked_missing)
             tracks_added_total += liked_added
 
@@ -202,35 +198,9 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
                 sp,
                 cfg.spotify.frequent_playlist_id,
                 use_full_history=False,
-                recent_track_ids=[tid for (tid, _uri, *_rest) in track_rows],
+                recent_track_ids=[r.track_id for r in track_rows],
             )
             tracks_added_total += frequent_added
-
-        # Legacy all-playlist cache (keep as a mirror for dedupe; optional use)
-        known_ids = queries.get_known_playlist_track_ids(db, playlist_id)
-        to_add = [(tid, uri) for (tid, uri, *_rest) in track_rows if tid not in known_ids]
-        to_add_uris = [uri for (_tid, uri) in to_add]
-
-        if to_add_uris:
-            capacity = _remaining_capacity(sp, playlist_id)
-            if capacity is not None and capacity <= 0:
-                log.warning("All-playlist at capacity; skipping additions.")
-            else:
-                if capacity is not None and len(to_add_uris) > capacity:
-                    log.warning("All-playlist near capacity; truncating to %s items", capacity)
-                    to_add = to_add[:capacity]
-                    to_add_uris = to_add_uris[:capacity]
-                try:
-                    playlist_added = _add_to_playlist(sp, playlist_id, to_add_uris, cfg.add_batch_size)
-                except SpotifyException as exc:
-                    if exc.http_status == 400 and "Playlist size limit" in exc.msg:
-                        log.error("All-playlist size limit reached; skipping additions.")
-                        playlist_added = 0
-                    else:
-                        raise
-                if playlist_added:
-                    queries.mark_tracks_in_playlist(db, playlist_id, to_add)
-                tracks_added_total += playlist_added
 
         if newest_ms > 0:
             cursor_out = newest_ms + 1
@@ -245,17 +215,15 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
             status="success",
         )
         log.info(
-            "sync_recent success | plays=%s liked_added=%s playlist_added=%s frequent_added=%s cursor_in=%s cursor_out=%s",
+            "sync_recent success | plays=%s liked_added=%s frequent_added=%s cursor_in=%s cursor_out=%s",
             plays_fetched,
             liked_added,
-            playlist_added,
             frequent_added,
             cursor_in,
             cursor_out,
         )
         return SyncResult(
             plays_fetched=plays_fetched,
-            playlist_added=playlist_added,
             liked_added=liked_added,
             frequent_added=frequent_added,
             cursor_in_ms=cursor_in,
@@ -290,20 +258,11 @@ def _sync_frequent_playlist(
     """
     min_plays = max(cfg.spotify.frequent_min_plays, 1)
     if use_full_history:
-        rows = db.fetchall(
-            """
-            SELECT p.track_id, t.track_uri, COUNT(*) AS play_count, MAX(p.played_at_ms) AS last_play
-            FROM plays p
-            JOIN tracks t ON p.track_id = t.track_id
-            GROUP BY p.track_id, t.track_uri
-            HAVING play_count >= ?
-            ORDER BY play_count DESC, last_play DESC
-            """,
-            (min_plays,),
-        )
+        rows = queries.get_frequent_tracks(db, min_plays)
     else:
         if not recent_track_ids:
             return 0
+        # Dynamic placeholders required for IN clause — must stay inline
         placeholders = ",".join(["?"] * len(recent_track_ids))
         rows = db.fetchall(
             f"""
@@ -317,6 +276,7 @@ def _sync_frequent_playlist(
             """,
             (*recent_track_ids, min_plays),
         )
+        rows = [{"track_id": str(r["track_id"]), "track_uri": str(r["track_uri"]), "play_count": int(r["play_count"])} for r in rows]
     if not rows:
         log.info(
             "Frequent playlist: no candidates (min_plays=%s, full_history=%s, recent_ids=%s)",
@@ -340,11 +300,9 @@ def _sync_frequent_playlist(
     if capacity is not None and capacity <= 0:
         log.warning("Frequent playlist at capacity; skipping additions.")
         return 0
-    if capacity is not None and len(candidates) > capacity:
-        candidates = candidates[:capacity]
-        log.warning("Frequent playlist near capacity; truncating to %s items", capacity)
+    candidates = _apply_capacity_limit(candidates, capacity, "Frequent playlist")
 
-    added = _add_to_playlist(sp, playlist_id, [uri for (_tid, uri) in candidates], cfg.add_batch_size)
+    added = add_tracks_to_playlist(sp, playlist_id, [uri for (_tid, uri) in candidates], cfg.add_batch_size)
     if added:
         queries.mark_tracks_in_playlist(db, playlist_id, candidates)
     return added
@@ -352,8 +310,8 @@ def _sync_frequent_playlist(
 
 def sync_all_tracks(cfg: AppConfig, db: DB, sp: SpotifyClient) -> int:
     """
-    Add any tracks in the DB that are not yet in the playlist cache/Spotify playlist.
-    Useful after a history import to seed the All playlist.
+    Add any tracks in the DB that are not yet in liked songs / frequent playlist.
+    Useful after a history import to seed liked songs.
     """
     if cfg.spotify is None:
         raise RuntimeError("Spotify credentials not configured; set SPOTIFY_* env vars.")
@@ -367,42 +325,9 @@ def sync_all_tracks(cfg: AppConfig, db: DB, sp: SpotifyClient) -> int:
     log.info("sync_all_tracks: liked_missing=%s liked_known=%s", len(liked_missing), len(liked_known))
     liked_added = 0
     if liked_missing:
-        liked_added = _add_to_liked(sp, [tid for (tid, _uri) in liked_missing], cfg.like_batch_size)
+        liked_added = add_tracks_to_liked(sp, [tid for (tid, _uri) in liked_missing], cfg.like_batch_size)
         if liked_added:
             queries.mark_tracks_in_playlist(db, LIKED_CACHE_ID, liked_missing)
-
-    # All playlist cache (legacy mirror) with capacity guard
-    playlist_id = cfg.spotify.all_playlist_id
-    playlist_added = 0
-    capacity = _remaining_capacity(sp, playlist_id)
-    if capacity is None or capacity > 0:
-        known_ids = queries.get_known_playlist_track_ids(db, playlist_id)
-        missing_playlist = [(tid, uri) for (tid, uri) in all_tracks if tid not in known_ids]
-        log.info(
-            "sync_all_tracks: playlist_missing=%s playlist_known=%s capacity=%s",
-            len(missing_playlist),
-            len(known_ids),
-            capacity,
-        )
-        if capacity is not None and len(missing_playlist) > capacity:
-            missing_playlist = missing_playlist[:capacity]
-            log.warning("sync_all_tracks: playlist near capacity; truncating to first %s items", capacity)
-        if missing_playlist:
-            try:
-                playlist_added = _add_to_playlist(
-                    sp,
-                    playlist_id,
-                    [uri for (_tid, uri) in missing_playlist],
-                    cfg.add_batch_size,
-                )
-            except SpotifyException as exc:
-                if exc.http_status == 400 and "Playlist size limit" in exc.msg:
-                    log.error("sync_all_tracks: playlist size limit reached before adding; consider clearing items")
-                    playlist_added = 0
-                else:
-                    raise
-            if playlist_added:
-                queries.mark_tracks_in_playlist(db, playlist_id, missing_playlist)
 
     # Frequent playlist (optional)
     frequent_added = 0
@@ -418,12 +343,11 @@ def sync_all_tracks(cfg: AppConfig, db: DB, sp: SpotifyClient) -> int:
         log.info("sync_all_tracks: no frequent playlist configured")
 
     log.info(
-        "sync_all_tracks summary | liked_added=%s playlist_added=%s frequent_added=%s",
+        "sync_all_tracks summary | liked_added=%s frequent_added=%s",
         liked_added,
-        playlist_added,
         frequent_added,
     )
-    return liked_added + playlist_added + frequent_added
+    return liked_added + frequent_added
 
 
 def _remaining_capacity(sp: SpotifyClient, playlist_id: str) -> int | None:
@@ -438,5 +362,5 @@ def _remaining_capacity(sp: SpotifyClient, playlist_id: str) -> int | None:
             return None
         max_items = 10_000
         return max(max_items - int(total), 0)
-    except Exception:  # noqa: BLE001
+    except (SpotifyException, KeyError, TypeError, ValueError):
         return None

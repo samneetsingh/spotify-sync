@@ -34,13 +34,16 @@ else
   LOG_PIPE=">> \"${PROJECT_DIR}/data/logs/cron.log\""
 fi
 
-CRON_LINE="*/10 * * * * cd \"${PROJECT_DIR}\" && ${LOCK_CMD}${POETRY_BIN} run spotify sync 2>&1 ${LOG_PIPE}"
+SYNC_LINE="*/10 * * * * cd \"${PROJECT_DIR}\" && ${LOCK_CMD}${POETRY_BIN} run spotify sync 2>&1 ${LOG_PIPE}"
+ARTIST_LINE="0 3 * * * cd \"${PROJECT_DIR}\" && ${LOCK_CMD}${POETRY_BIN} run spotify artist-playlists 2>&1 ${LOG_PIPE}"
 
-# Install cron job (idempotent)
+# Install cron jobs (idempotent)
 (
-  crontab -l 2>/dev/null | grep -v "spotify sync" || true
-  echo "${CRON_LINE}"
+  crontab -l 2>/dev/null | grep -v "spotify sync" | grep -v "spotify artist-playlists" || true
+  echo "${SYNC_LINE}"
+  echo "${ARTIST_LINE}"
 ) | crontab -
 
-echo "Installed cron job:"
-echo "${CRON_LINE}"
+echo "Installed cron jobs:"
+echo "${SYNC_LINE}"
+echo "${ARTIST_LINE}"

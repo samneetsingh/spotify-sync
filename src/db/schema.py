@@ -1,5 +1,5 @@
 # src/db/schema.py
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 4
 
 MIGRATIONS: list[tuple[int, str]] = [
     (
@@ -65,5 +65,47 @@ MIGRATIONS: list[tuple[int, str]] = [
           error         TEXT
         );
         """,
-    )
+    ),
+    (
+        2,
+        """
+        CREATE TABLE IF NOT EXISTS playlists (
+          playlist_id   TEXT PRIMARY KEY,
+          name          TEXT NOT NULL,
+          artist_name   TEXT,
+          playlist_type TEXT NOT NULL DEFAULT 'artist',
+          created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playlists_artist
+          ON playlists(artist_name);
+        CREATE INDEX IF NOT EXISTS idx_playlists_type
+          ON playlists(playlist_type);
+        """,
+    ),
+    (
+        3,
+        """
+        CREATE TABLE IF NOT EXISTS playlist_removals (
+          playlist_id TEXT NOT NULL,
+          track_id    TEXT NOT NULL,
+          track_uri   TEXT NOT NULL,
+          removed_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (playlist_id, track_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playlist_removals_playlist
+          ON playlist_removals(playlist_id);
+        """,
+    ),
+    (
+        4,
+        """
+        CREATE TABLE IF NOT EXISTS playlist_exclusions (
+          artist_name  TEXT PRIMARY KEY,
+          playlist_id  TEXT,
+          excluded_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """,
+    ),
 ]

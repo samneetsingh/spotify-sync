@@ -1,11 +1,14 @@
 # src/db/connection.py
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from .schema import MIGRATIONS, SCHEMA_VERSION
+
+log = logging.getLogger(__name__)
 
 
 class DB:
@@ -16,8 +19,8 @@ class DB:
         # Ensure database and parent dir are private to the current user
         try:
             path.parent.chmod(0o700)
-        except Exception:
-            pass
+        except OSError:
+            log.debug("Could not chmod parent directory %s", path.parent)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         # Enforce relational integrity and prefer WAL for concurrent reads
@@ -26,8 +29,14 @@ class DB:
         try:
             if path.exists():
                 path.chmod(0o600)
-        except Exception:
-            pass
+        except OSError:
+            log.debug("Could not chmod database file %s", path)
+
+    def __enter__(self) -> DB:
+        return self
+
+    def __exit__(self, exc_type: type | None, exc_val: BaseException | None, exc_tb: object) -> None:
+        self.close()
 
     def close(self) -> None:
         self.conn.close()

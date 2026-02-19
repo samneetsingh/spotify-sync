@@ -26,6 +26,7 @@ def test_migrate_creates_tables(tmp_path) -> None:
         "playlist_tracks",
         "sync_runs",
         "schema_migrations",
+        "playlists",
     }
     assert expected.issubset(tables)
     db.close()

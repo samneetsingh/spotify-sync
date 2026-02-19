@@ -5,17 +5,16 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 from src.config import AppConfig
 from src.db import queries
 from src.db.connection import DB
+from src.db.queries import PlayRow, TrackRow
+from src.spotify_helpers import convert_explicit_flag
 from src.utils.time import iso8601_to_ms
 
 log = logging.getLogger("history_import")
-
-HistoryTrackRow = Tuple[str, str, str | None, str | None, str | None, int | None, int | None]
-HistoryPlayRow = Tuple[int, str, str, str | None, str | None, str]
 
 
 @dataclass(frozen=True)
@@ -33,7 +32,7 @@ def _parse_end_time(end_time: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _parse_record(record: dict) -> tuple[HistoryPlayRow | None, HistoryTrackRow | None]:
+def _parse_record(record: dict) -> tuple[PlayRow | None, TrackRow | None]:
     # Try spotify track URI first
     uri = record.get("spotify_track_uri") or record.get("track_uri") or record.get("trackUri")
     track_id = None
@@ -48,39 +47,33 @@ def _parse_record(record: dict) -> tuple[HistoryPlayRow | None, HistoryTrackRow 
 
     try:
         played_at_ms = iso8601_to_ms(played_at_str)
-    except Exception:
+    except (ValueError, OverflowError):
         try:
             played_at_ms = _parse_end_time(played_at_str)
-        except Exception:
+        except (ValueError, OverflowError):
             return None, None
 
     track_name = record.get("master_metadata_track_name") or record.get("trackName")
     album_name = record.get("master_metadata_album_album_name")
     artist_name = record.get("master_metadata_album_artist_name") or record.get("artistName")
-    explicit_int = None
-    if "explicit" in record:
-        explicit_flag = record.get("explicit")
-        explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
-    elif "is_explicit" in record:
-        explicit_flag = record.get("is_explicit")
-        explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
+    explicit_int = convert_explicit_flag(record)
 
-    track_row: HistoryTrackRow = (
-        track_id,
-        uri,
-        track_name,
-        artist_name,
-        album_name,
-        None,
-        explicit_int,
+    track_row = TrackRow(
+        track_id=track_id,
+        track_uri=uri,
+        name=track_name,
+        artists=artist_name,
+        album=album_name,
+        duration_ms=None,
+        explicit=explicit_int,
     )
-    play_row: HistoryPlayRow = (
-        played_at_ms,
-        track_id,
-        uri,
-        None,
-        None,
-        "history_import",
+    play_row = PlayRow(
+        played_at_ms=played_at_ms,
+        track_id=track_id,
+        track_uri=uri,
+        context_type=None,
+        context_uri=None,
+        source="history_import",
     )
     return play_row, track_row
 
@@ -172,8 +165,8 @@ def import_history_file(cfg: AppConfig, db: DB, path: str) -> ImportResult:
     if not p.exists():
         raise FileNotFoundError(path)
 
-    plays: List[HistoryPlayRow] = []
-    tracks: List[HistoryTrackRow] = []
+    plays: List[PlayRow] = []
+    tracks: List[TrackRow] = []
     skipped = 0
     records_seen = 0
 
