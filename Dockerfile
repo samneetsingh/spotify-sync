@@ -20,7 +20,7 @@ COPY --from=builder /tmp/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Copy application code
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src/ src/
 
 # Install the project itself (entry points)
