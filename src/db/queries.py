@@ -18,6 +18,9 @@ class TrackRow(NamedTuple):
     album: str | None
     duration_ms: int | None
     explicit: int | None
+    popularity: int | None = None
+    release_date: str | None = None
+    isrc: str | None = None
 
 
 class PlayRow(NamedTuple):
@@ -32,6 +35,22 @@ class PlayRow(NamedTuple):
 class PlaylistTrackRow(NamedTuple):
     track_id: str
     track_uri: str
+
+
+class TrackArtistRow(NamedTuple):
+    track_id: str
+    artist_id: str
+    artist_name: str
+    position: int
+
+
+class ArtistRow(NamedTuple):
+    artist_id: str
+    name: str
+    genres: str | None  # JSON array string
+    popularity: int | None
+    followers: int | None
+
 
 _SQL_CACHE: dict[str, str] = {}
 
@@ -303,3 +322,20 @@ def finish_sync_run(
         _load_sql("finish_sync_run.sql"),
         (cursor_out_ms, plays_fetched, tracks_added, status, error, run_id),
     )
+
+
+def upsert_track_artists(db: DB, rows: Sequence[TrackArtistRow]) -> None:
+    if not rows:
+        return
+    db.executemany(_load_sql("upsert_track_artists.sql"), list(rows))
+
+
+def upsert_artists(db: DB, rows: Sequence[ArtistRow]) -> None:
+    if not rows:
+        return
+    db.executemany(_load_sql("upsert_artists.sql"), list(rows))
+
+
+def get_unenriched_artist_ids(db: DB) -> list[str]:
+    rows = db.fetchall(_load_sql("get_unenriched_artist_ids.sql"))
+    return [str(r["artist_id"]) for r in rows]

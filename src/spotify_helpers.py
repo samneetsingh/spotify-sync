@@ -1,6 +1,7 @@
 """Shared helpers for Spotify playlist and track operations."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Iterable
 
 from src.utils.batching import chunk_list
@@ -9,6 +10,22 @@ if TYPE_CHECKING:
     from src.ingestion.spotify_client import SpotifyClient
 
 LIKED_CACHE_ID = "__liked__"
+
+
+@dataclass(frozen=True)
+class ArtistInfo:
+    artist_id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class TrackMetadata:
+    artist_names: str | None
+    explicit_int: int | None
+    popularity: int | None = None
+    release_date: str | None = None
+    isrc: str | None = None
+    artist_infos: list[ArtistInfo] = field(default_factory=list)
 
 
 def add_tracks_to_playlist(
@@ -37,16 +54,44 @@ def add_tracks_to_liked(
     return added
 
 
-def extract_track_metadata(track: dict) -> tuple[str | None, int | None]:
+def extract_track_metadata(track: dict) -> TrackMetadata:
     """
-    Extract artist names and explicit flag from a Spotify track object.
-    Returns (artist_names, explicit_int).
+    Extract metadata from a Spotify track object.
+    Returns a TrackMetadata with artist names, explicit flag, popularity,
+    release date, ISRC, and per-artist id/name pairs.
     """
     artists = track.get("artists") or []
     artist_names = ", ".join([a.get("name") for a in artists if a.get("name")]) or None
     explicit_flag = track.get("explicit")
     explicit_int = 1 if explicit_flag is True else 0 if explicit_flag is False else None
-    return artist_names, explicit_int
+
+    # Popularity (directly on the track object)
+    popularity = track.get("popularity")
+
+    # Release date (on the album object)
+    album = track.get("album") or {}
+    release_date = album.get("release_date")
+
+    # ISRC (in external_ids)
+    external_ids = track.get("external_ids") or {}
+    isrc = external_ids.get("isrc")
+
+    # Per-artist structured info (id + name)
+    artist_infos = []
+    for a in artists:
+        aid = a.get("id")
+        aname = a.get("name")
+        if aid and aname:
+            artist_infos.append(ArtistInfo(artist_id=aid, name=aname))
+
+    return TrackMetadata(
+        artist_names=artist_names,
+        explicit_int=explicit_int,
+        popularity=popularity,
+        release_date=release_date,
+        isrc=isrc,
+        artist_infos=artist_infos,
+    )
 
 
 def convert_explicit_flag(record: dict) -> int | None:

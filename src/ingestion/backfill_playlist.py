@@ -7,7 +7,7 @@ from typing import Iterable, List
 from src.config import AppConfig
 from src.db import queries
 from src.db.connection import DB
-from src.db.queries import PlaylistTrackRow, TrackRow
+from src.db.queries import PlaylistTrackRow, TrackArtistRow, TrackRow
 from src.ingestion.spotify_client import SpotifyClient
 from src.spotify_helpers import LIKED_CACHE_ID, extract_track_metadata
 
@@ -41,7 +41,7 @@ def _fetch_playlist_items(sp: SpotifyClient, playlist_id: str, limit: int = 100)
                 playlist_id,
                 limit=limit,
                 offset=offset,
-                fields="items(track(id,uri,name,album(name),artists(name),duration_ms,explicit)),next",
+                fields="items(track(id,uri,name,album(name,release_date),artists(id,name),duration_ms,explicit,popularity,external_ids)),next",
             )
             items = resp.get("items") or []
             for item in items:
@@ -63,6 +63,7 @@ def backfill_playlist_cache(cfg: AppConfig, db: DB, sp: SpotifyClient, playlist_
 
     track_rows: List[TrackRow] = []
     playlist_rows: List[PlaylistTrackRow] = []
+    track_artist_rows: List[TrackArtistRow] = []
     seen_ids: set[str] = set()
 
     for item in _fetch_playlist_items(sp, playlist_id):
@@ -76,21 +77,33 @@ def backfill_playlist_cache(cfg: AppConfig, db: DB, sp: SpotifyClient, playlist_
         seen_ids.add(track_id)
 
         album = track.get("album") or {}
-        artist_names, explicit_int = extract_track_metadata(track)
+        meta = extract_track_metadata(track)
 
         track_rows.append(TrackRow(
             track_id=track_id,
             track_uri=track_uri,
             name=track.get("name"),
-            artists=artist_names,
+            artists=meta.artist_names,
             album=album.get("name"),
             duration_ms=track.get("duration_ms"),
-            explicit=explicit_int,
+            explicit=meta.explicit_int,
+            popularity=meta.popularity,
+            release_date=meta.release_date,
+            isrc=meta.isrc,
         ))
         playlist_rows.append(PlaylistTrackRow(track_id=track_id, track_uri=track_uri))
 
+        for i, info in enumerate(meta.artist_infos):
+            track_artist_rows.append(TrackArtistRow(
+                track_id=track_id,
+                artist_id=info.artist_id,
+                artist_name=info.name,
+                position=i,
+            ))
+
     queries.upsert_tracks(db, track_rows)
     queries.mark_tracks_in_playlist(db, playlist_id, playlist_rows)
+    queries.upsert_track_artists(db, track_artist_rows)
 
     log.info(
         "Backfilled playlist cache for %s | seen=%s written=%s",

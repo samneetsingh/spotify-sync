@@ -9,7 +9,7 @@ from spotipy.exceptions import SpotifyException
 from src.config import AppConfig
 from src.db.connection import DB
 from src.db import queries, state
-from src.db.queries import PlayRow, TrackRow
+from src.db.queries import PlayRow, TrackArtistRow, TrackRow
 from src.ingestion.spotify_client import SpotifyClient
 from src.spotify_helpers import (
     LIKED_CACHE_ID,
@@ -31,14 +31,17 @@ class SyncResult:
     cursor_out_ms: int | None
 
 
-def _parse_recently_played(resp: dict) -> Tuple[List[PlayRow], List[TrackRow], int]:
+def _parse_recently_played(
+    resp: dict,
+) -> Tuple[List[PlayRow], List[TrackRow], List[TrackArtistRow], int]:
     """
     Parse Spotify recently_played response into rows for DB insertion.
-    Returns (plays_rows, tracks_rows, newest_played_at_ms).
+    Returns (plays_rows, tracks_rows, track_artist_rows, newest_played_at_ms).
     """
     items = resp.get("items") or []
     plays: List[PlayRow] = []
     tracks: List[TrackRow] = []
+    track_artists: List[TrackArtistRow] = []
     seen_track_ids: set[str] = set()
     newest_ms = 0
 
@@ -67,19 +70,30 @@ def _parse_recently_played(resp: dict) -> Tuple[List[PlayRow], List[TrackRow], i
         seen_track_ids.add(track_id)
 
         album = track.get("album") or {}
-        artist_names, explicit_int = extract_track_metadata(track)
+        meta = extract_track_metadata(track)
 
         tracks.append(TrackRow(
             track_id=track_id,
             track_uri=track_uri,
             name=track.get("name"),
-            artists=artist_names,
+            artists=meta.artist_names,
             album=album.get("name"),
             duration_ms=track.get("duration_ms"),
-            explicit=explicit_int,
+            explicit=meta.explicit_int,
+            popularity=meta.popularity,
+            release_date=meta.release_date,
+            isrc=meta.isrc,
         ))
 
-    return plays, tracks, newest_ms
+        for i, info in enumerate(meta.artist_infos):
+            track_artists.append(TrackArtistRow(
+                track_id=track_id,
+                artist_id=info.artist_id,
+                artist_name=info.name,
+                position=i,
+            ))
+
+    return plays, tracks, track_artists, newest_ms
 
 
 def _apply_capacity_limit(
@@ -154,6 +168,7 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
         # Fetch pages until we exhaust results to avoid dropping plays when > limit
         combined_plays: List[tuple] = []
         combined_tracks: dict[str, tuple] = {}
+        combined_track_artists: List[TrackArtistRow] = []
         cursor_marker = cursor_in
         newest_ms = 0
         while True:
@@ -161,12 +176,13 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
                 limit=cfg.recently_played_limit,
                 after=cursor_marker,
             ) or {}
-            plays_rows, track_rows, batch_newest = _parse_recently_played(resp)
+            plays_rows, track_rows, ta_rows, batch_newest = _parse_recently_played(resp)
             if not plays_rows:
                 break
             combined_plays.extend(plays_rows)
             for row in track_rows:
                 combined_tracks[row.track_id] = row
+            combined_track_artists.extend(ta_rows)
             newest_ms = max(newest_ms, batch_newest)
             if len(resp.get("items") or []) < cfg.recently_played_limit:
                 break
@@ -181,6 +197,13 @@ def sync_recent(cfg: AppConfig, db: DB, sp: SpotifyClient) -> SyncResult:
 
         queries.upsert_tracks(db, track_rows)
         queries.insert_plays(db, plays_rows)
+        queries.upsert_track_artists(db, combined_track_artists)
+
+        # Enrich new artists with genre/popularity metadata
+        from src.ingestion.enrich import enrich_artists_for_ids
+
+        new_artist_ids = list({ta.artist_id for ta in combined_track_artists})
+        enrich_artists_for_ids(sp, db, new_artist_ids)
 
         # Liked songs (primary target)
         liked_known = queries.get_known_playlist_track_ids(db, LIKED_CACHE_ID)

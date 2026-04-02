@@ -42,6 +42,8 @@ def main() -> None:
         help="Show what would happen without creating playlists or adding tracks",
     )
 
+    sub.add_parser("enrich", help="Enrich artists with genre and popularity metadata")
+
     importer = sub.add_parser("import-history", help="Import streaming history JSON")
     importer.add_argument("path", help="Path to a Spotify history JSON file")
 
@@ -123,6 +125,15 @@ def main() -> None:
                     )
                 for p in result.pruned:
                     print(f"  PRUNED {p.artist}: {p.track_count} tracks (playlist={p.playlist_id})")
+        elif args.cmd == "enrich":
+            if cfg.spotify is None:
+                print("Missing Spotify config; set SPOTIFY_* env vars.", file=sys.stderr)
+                sys.exit(1)
+            spotify = get_spotify(cfg.spotify)
+            from .ingestion.enrich import enrich_all
+
+            result = enrich_all(spotify, db)
+            print(f"Enrichment complete: artists={result.artists_added}")
         elif args.cmd == "import-history":
             from .ingestion.history_import import import_history_path
 

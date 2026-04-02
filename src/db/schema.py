@@ -1,5 +1,5 @@
 # src/db/schema.py
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 7
 
 MIGRATIONS: list[tuple[int, str]] = [
     (
@@ -106,6 +106,82 @@ MIGRATIONS: list[tuple[int, str]] = [
           playlist_id  TEXT,
           excluded_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        """,
+    ),
+    (
+        5,
+        """
+        ALTER TABLE tracks ADD COLUMN popularity INTEGER;
+        ALTER TABLE tracks ADD COLUMN release_date TEXT;
+        ALTER TABLE tracks ADD COLUMN isrc TEXT;
+
+        CREATE TABLE IF NOT EXISTS artists (
+          artist_id    TEXT PRIMARY KEY,
+          name         TEXT NOT NULL,
+          genres       TEXT,
+          popularity   INTEGER,
+          followers    INTEGER,
+          updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS track_artists (
+          track_id    TEXT NOT NULL,
+          artist_id   TEXT NOT NULL,
+          artist_name TEXT NOT NULL,
+          position    INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (track_id, artist_id),
+          FOREIGN KEY (track_id) REFERENCES tracks(track_id),
+          FOREIGN KEY (artist_id) REFERENCES artists(artist_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_track_artists_artist
+          ON track_artists(artist_id);
+
+        CREATE TABLE IF NOT EXISTS audio_features (
+          track_id          TEXT PRIMARY KEY,
+          acousticness      REAL,
+          danceability      REAL,
+          energy            REAL,
+          instrumentalness  REAL,
+          liveness          REAL,
+          loudness          REAL,
+          speechiness       REAL,
+          tempo             REAL,
+          valence           REAL,
+          key               INTEGER,
+          mode              INTEGER,
+          time_signature    INTEGER,
+          updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (track_id) REFERENCES tracks(track_id)
+        );
+        """,
+    ),
+    (
+        6,
+        """
+        DROP TABLE IF EXISTS audio_features;
+        """,
+    ),
+    (
+        7,
+        """
+        CREATE TABLE IF NOT EXISTS track_artists_new (
+          track_id    TEXT NOT NULL,
+          artist_id   TEXT NOT NULL,
+          artist_name TEXT NOT NULL,
+          position    INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (track_id, artist_id),
+          FOREIGN KEY (track_id) REFERENCES tracks(track_id)
+        );
+
+        INSERT OR IGNORE INTO track_artists_new
+          SELECT track_id, artist_id, artist_name, position FROM track_artists;
+
+        DROP TABLE track_artists;
+        ALTER TABLE track_artists_new RENAME TO track_artists;
+
+        CREATE INDEX IF NOT EXISTS idx_track_artists_artist
+          ON track_artists(artist_id);
         """,
     ),
 ]
