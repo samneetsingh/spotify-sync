@@ -34,6 +34,8 @@ class SpotifyConfig:
     all_playlist_id: str
     frequent_playlist_id: Optional[str]
     frequent_min_plays: int
+    hindi_favorites_playlist_id: Optional[str]
+    hindi_favorites_min_plays: int
     like_batch_size: int
     cache_path: str
 
@@ -179,6 +181,11 @@ def _load_spotify_config() -> SpotifyConfig:
         ),
         all_playlist_id=_required_env("SPOTIFY_ALL_PLAYLIST_ID"),
         frequent_playlist_id=os.getenv("SPOTIFY_FREQUENT_PLAYLIST_ID"),
+        hindi_favorites_playlist_id=os.getenv("SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID"),
+        hindi_favorites_min_plays=_positive_int(
+            "HINDI_FAVORITES_MIN_PLAYS",
+            _resolve_int("HINDI_FAVORITES_MIN_PLAYS", "spotify", "hindi_favorites_min_plays", 5),
+        ),
         frequent_min_plays=_positive_int(
             "FREQUENT_MIN_PLAYS",
             _resolve_int("FREQUENT_MIN_PLAYS", "spotify", "frequent_min_plays", 2),

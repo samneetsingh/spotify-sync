@@ -101,6 +101,8 @@ def make_config(tmp_path, **overrides) -> AppConfig:
             all_playlist_id="playlist123",
             frequent_playlist_id=None,
             frequent_min_plays=2,
+            hindi_favorites_playlist_id=None,
+            hindi_favorites_min_plays=5,
             like_batch_size=50,
             cache_path=str(tmp_path / ".cache"),
         ),

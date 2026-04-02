@@ -42,6 +42,8 @@ def main() -> None:
         help="Show what would happen without creating playlists or adding tracks",
     )
 
+    sub.add_parser("hindi-favorites", help="Populate Hindi/Desi favorites playlist")
+
     sub.add_parser("enrich", help="Enrich artists with genre and popularity metadata")
 
     importer = sub.add_parser("import-history", help="Import streaming history JSON")
@@ -125,6 +127,21 @@ def main() -> None:
                     )
                 for p in result.pruned:
                     print(f"  PRUNED {p.artist}: {p.track_count} tracks (playlist={p.playlist_id})")
+        elif args.cmd == "hindi-favorites":
+            if cfg.spotify is None:
+                print("Missing Spotify config; set SPOTIFY_* env vars.", file=sys.stderr)
+                sys.exit(1)
+            if not cfg.spotify.hindi_favorites_playlist_id:
+                print("Set SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID to enable this feature.", file=sys.stderr)
+                sys.exit(1)
+            spotify = get_spotify(cfg.spotify)
+            from .features.hindi_favorites import build_hindi_favorites
+
+            result = build_hindi_favorites(cfg, db, spotify)
+            print(
+                f"Hindi favorites: playlist={result.playlist_id} "
+                f"added={result.tracks_added} considered={result.tracks_considered}"
+            )
         elif args.cmd == "enrich":
             if cfg.spotify is None:
                 print("Missing Spotify config; set SPOTIFY_* env vars.", file=sys.stderr)

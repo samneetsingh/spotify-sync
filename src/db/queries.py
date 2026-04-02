@@ -299,6 +299,14 @@ def get_yearly_tracks(
     ]
 
 
+def get_hindi_favorites(db: DB, min_plays: int = 5) -> list[PlaylistTrackRow]:
+    rows = db.fetchall(
+        _load_sql("get_hindi_favorites.sql"),
+        (min_plays,),
+    )
+    return [PlaylistTrackRow(track_id=str(r["track_id"]), track_uri=str(r["track_uri"])) for r in rows]
+
+
 def create_sync_run(db: DB, cursor_in_ms: int) -> int:
     cur = db.conn.execute(
         "INSERT INTO sync_runs(cursor_in_ms, status) VALUES(?, 'running')",
