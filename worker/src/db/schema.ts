@@ -1,0 +1,162 @@
+// Matches the Python schema at its v7 (src/db/schema.py).
+const PYTHON_V7_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS tracks (
+    track_id TEXT PRIMARY KEY,
+    track_uri TEXT NOT NULL,
+    name TEXT,
+    artists TEXT,
+    album TEXT,
+    duration_ms INTEGER,
+    explicit INTEGER,
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    popularity INTEGER,
+    release_date TEXT,
+    isrc TEXT
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS plays (
+    played_at_ms INTEGER NOT NULL,
+    track_id TEXT NOT NULL,
+    track_uri TEXT NOT NULL,
+    context_type TEXT,
+    context_uri TEXT,
+    source TEXT NOT NULL,
+    inserted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (played_at_ms, track_id),
+    FOREIGN KEY (track_id) REFERENCES tracks(track_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS artists (
+    artist_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    genres TEXT,
+    popularity INTEGER,
+    followers INTEGER,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS track_artists (
+    track_id TEXT NOT NULL,
+    artist_id TEXT NOT NULL,
+    artist_name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (track_id, artist_id),
+    FOREIGN KEY (track_id) REFERENCES tracks(track_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS playlists (
+    playlist_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    artist_name TEXT,
+    playlist_type TEXT NOT NULL DEFAULT 'artist',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS playlist_tracks (
+    playlist_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    track_uri TEXT NOT NULL,
+    first_added_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (playlist_id, track_id),
+    FOREIGN KEY (track_id) REFERENCES tracks(track_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS playlist_removals (
+    playlist_id TEXT NOT NULL,
+    track_id TEXT NOT NULL,
+    track_uri TEXT NOT NULL,
+    removed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (playlist_id, track_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS playlist_exclusions (
+    artist_name TEXT PRIMARY KEY,
+    playlist_id TEXT,
+    excluded_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS sync_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    cursor_in_ms INTEGER,
+    cursor_out_ms INTEGER,
+    plays_fetched INTEGER,
+    tracks_added INTEGER,
+    status TEXT,
+    error TEXT
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  // Indexes
+  `CREATE INDEX IF NOT EXISTS idx_plays_time ON plays(played_at_ms)`,
+  `CREATE INDEX IF NOT EXISTS idx_plays_track ON plays(track_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist ON playlist_tracks(playlist_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_playlist_removals_playlist ON playlist_removals(playlist_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_playlists_artist ON playlists(artist_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_playlists_type ON playlists(playlist_type)`,
+];
+
+const WORKER_ACTIONS = [
+  `CREATE TABLE IF NOT EXISTS worker_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    job TEXT NOT NULL,
+    write_mode TEXT NOT NULL,
+    sync_run_id INTEGER,
+    executed INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    item_count INTEGER NOT NULL,
+    items TEXT NOT NULL
+  )`,
+];
+
+interface Migration {
+  version: number;
+  statements: string[];
+  /** Versions to record as applied; defaults to [version]. */
+  records?: number[];
+}
+
+// D1 starts at Python's v7, so v7 records 1-7: on rollback, Python's per-version
+// migrate() must see all of its migrations as applied. Worker-only changes use 8+.
+export const MIGRATIONS: Migration[] = [
+  { version: 7, statements: PYTHON_V7_SCHEMA, records: [1, 2, 3, 4, 5, 6, 7] },
+  { version: 8, statements: WORKER_ACTIONS },
+];
+
+export function migrationStatements(m: Migration): string[] {
+  const versions = m.records ?? [m.version];
+  return [
+    ...m.statements,
+    ...versions.map((v) => `INSERT OR IGNORE INTO schema_migrations (version) VALUES (${v})`),
+  ];
+}
+
+export async function migrate(db: D1Database): Promise<void> {
+  await db.prepare(PYTHON_V7_SCHEMA[0]!).run();
+
+  const applied = await db
+    .prepare("SELECT MAX(version) AS version FROM schema_migrations")
+    .first<{ version: number | null }>();
+  const currentVersion = applied?.version ?? 0;
+
+  for (const m of MIGRATIONS) {
+    if (m.version <= currentVersion) continue;
+    await db.batch(migrationStatements(m).map((sql) => db.prepare(sql)));
+    console.log(`Applied migration v${m.version}`);
+  }
+}

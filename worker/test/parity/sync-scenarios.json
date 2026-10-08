@@ -1,0 +1,1012 @@
+{
+ "dump_queries": {"tracks": "SELECT track_id, track_uri, name, artists, album, duration_ms, explicit, popularity, release_date, isrc FROM tracks ORDER BY track_id", "plays": "SELECT played_at_ms, track_id, track_uri, context_type, context_uri, source FROM plays ORDER BY played_at_ms, track_id", "track_artists": "SELECT track_id, artist_id, artist_name, position FROM track_artists ORDER BY track_id, artist_id", "artists": "SELECT artist_id, name, genres, popularity, followers FROM artists ORDER BY artist_id", "playlist_tracks": "SELECT playlist_id, track_id, track_uri FROM playlist_tracks ORDER BY playlist_id, track_id", "state": "SELECT key, CASE WHEN key LIKE 'playlist_cache_refreshed_ms:%' THEN 'set' ELSE value END AS value FROM state WHERE key != 'spotify_refresh_token' ORDER BY key", "sync_runs": "SELECT cursor_in_ms, cursor_out_ms, plays_fetched, tracks_added, status, error IS NOT NULL AS has_error FROM sync_runs ORDER BY id", "playlists": "SELECT playlist_id, name, artist_name, playlist_type FROM playlists ORDER BY playlist_id", "playlist_removals": "SELECT playlist_id, track_id, track_uri FROM playlist_removals ORDER BY playlist_id, track_id", "playlist_exclusions": "SELECT artist_name, playlist_id FROM playlist_exclusions ORDER BY artist_name"},
+ "scenarios": [
+  {
+   "name": "basic",
+   "job": "sync",
+   "runs": 2,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["t1", "Old Name", "Artist One"]
+    ],
+    "plays": [
+     [1, "t1"]
+    ],
+    "playlist_tracks": [],
+    "artists": [
+     ["a3", "Known Artist", "[\"pop\"]"]
+    ],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {
+     "t1": {
+      "name": "Song One",
+      "artists": [
+       ["a1", "Artist One"]
+      ],
+      "album": "Alb",
+      "release_date": "2020-01-01",
+      "explicit": true,
+      "popularity": 50,
+      "isrc": "US1",
+      "duration_ms": 1000
+     },
+     "t2": {
+      "name": "Song Two",
+      "artists": [
+       ["a1", "Artist One"],
+       ["a2", "Tyler, the Creator"]
+      ],
+      "album": "Alb2",
+      "release_date": "2021",
+      "explicit": false,
+      "popularity": 0,
+      "isrc": null,
+      "duration_ms": 2000
+     },
+     "t3": {
+      "name": "Song Three",
+      "artists": [
+       ["a3", "Known Artist"]
+      ],
+      "album": null,
+      "explicit": null
+     },
+     "t4": {
+      "name": "Canción",
+      "artists": [
+       ["a4", "Música"],
+       ["a5", "Missing From API"]
+      ],
+      "album": "Álbum"
+     }
+    },
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:10:00Z", "t2", "playlist", "spotify:playlist:ctx"],
+      ["2024-01-01T00:05:00Z", "t1", "album", "spotify:album:x"],
+      ["2024-01-01T00:03:00Z", "t3"],
+      ["2024-01-01T00:01:00Z", "t2"],
+      ["2024-01-01T00:00:00Z", "t4"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {"freq1": 50},
+    "artists": {
+     "a1": {
+      "name": "Artist One",
+      "genres": ["bollywood", "filmi"],
+      "popularity": 60,
+      "followers": 1000
+     },
+     "a2": {
+      "name": "Tyler, the Creator",
+      "genres": [],
+      "popularity": 10,
+      "followers": 5
+     },
+     "a4": {
+      "name": "Música",
+      "genres": ["música mexicana", "j-pop 🎵"],
+      "popularity": 30,
+      "followers": 42
+     }
+    },
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "already_cached",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["t1", "Song One", "Artist One"]
+    ],
+    "plays": [
+     [1, "t1"]
+    ],
+    "playlist_tracks": [
+     ["__liked__", "t1"],
+     ["freq1", "t1"]
+    ],
+    "artists": [
+     ["a1", "Artist One", null]
+    ],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {
+     "t1": {
+      "name": "Song One",
+      "artists": [
+       ["a1", "Artist One"]
+      ],
+      "album": "Alb",
+      "release_date": "2020-01-01",
+      "explicit": true,
+      "popularity": 50,
+      "isrc": "US1",
+      "duration_ms": 1000
+     },
+     "t2": {
+      "name": "Song Two",
+      "artists": [
+       ["a1", "Artist One"],
+       ["a2", "Tyler, the Creator"]
+      ],
+      "album": "Alb2",
+      "release_date": "2021",
+      "explicit": false,
+      "popularity": 0,
+      "isrc": null,
+      "duration_ms": 2000
+     },
+     "t3": {
+      "name": "Song Three",
+      "artists": [
+       ["a3", "Known Artist"]
+      ],
+      "album": null,
+      "explicit": null
+     },
+     "t4": {
+      "name": "Canción",
+      "artists": [
+       ["a4", "Música"],
+       ["a5", "Missing From API"]
+      ],
+      "album": "Álbum"
+     }
+    },
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:05:00Z", "t1"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "paginate",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 1,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "0"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "by_after": {
+      "0": [
+       ["2024-01-01T00:00:00Z", "p1"]
+      ],
+      "1704067200000": [
+       ["2024-01-01T00:05:00Z", "p2"]
+      ]
+     }
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "liked_batches",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": null,
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "b000"],
+      ["2024-01-01T00:01:00Z", "b001"],
+      ["2024-01-01T00:02:00Z", "b002"],
+      ["2024-01-01T00:03:00Z", "b003"],
+      ["2024-01-01T00:04:00Z", "b004"],
+      ["2024-01-01T00:05:00Z", "b005"],
+      ["2024-01-01T00:06:00Z", "b006"],
+      ["2024-01-01T00:07:00Z", "b007"],
+      ["2024-01-01T00:08:00Z", "b008"],
+      ["2024-01-01T00:09:00Z", "b009"],
+      ["2024-01-01T00:10:00Z", "b010"],
+      ["2024-01-01T00:11:00Z", "b011"],
+      ["2024-01-01T00:12:00Z", "b012"],
+      ["2024-01-01T00:13:00Z", "b013"],
+      ["2024-01-01T00:14:00Z", "b014"],
+      ["2024-01-01T00:15:00Z", "b015"],
+      ["2024-01-01T00:16:00Z", "b016"],
+      ["2024-01-01T00:17:00Z", "b017"],
+      ["2024-01-01T00:18:00Z", "b018"],
+      ["2024-01-01T00:19:00Z", "b019"],
+      ["2024-01-01T00:20:00Z", "b020"],
+      ["2024-01-01T00:21:00Z", "b021"],
+      ["2024-01-01T00:22:00Z", "b022"],
+      ["2024-01-01T00:23:00Z", "b023"],
+      ["2024-01-01T00:24:00Z", "b024"],
+      ["2024-01-01T00:25:00Z", "b025"],
+      ["2024-01-01T00:26:00Z", "b026"],
+      ["2024-01-01T00:27:00Z", "b027"],
+      ["2024-01-01T00:28:00Z", "b028"],
+      ["2024-01-01T00:29:00Z", "b029"],
+      ["2024-01-01T00:30:00Z", "b030"],
+      ["2024-01-01T00:31:00Z", "b031"],
+      ["2024-01-01T00:32:00Z", "b032"],
+      ["2024-01-01T00:33:00Z", "b033"],
+      ["2024-01-01T00:34:00Z", "b034"],
+      ["2024-01-01T00:35:00Z", "b035"],
+      ["2024-01-01T00:36:00Z", "b036"],
+      ["2024-01-01T00:37:00Z", "b037"],
+      ["2024-01-01T00:38:00Z", "b038"],
+      ["2024-01-01T00:39:00Z", "b039"],
+      ["2024-01-01T00:40:00Z", "b040"],
+      ["2024-01-01T00:41:00Z", "b041"],
+      ["2024-01-01T00:42:00Z", "b042"],
+      ["2024-01-01T00:43:00Z", "b043"],
+      ["2024-01-01T00:44:00Z", "b044"],
+      ["2024-01-01T00:45:00Z", "b045"],
+      ["2024-01-01T00:46:00Z", "b046"],
+      ["2024-01-01T00:47:00Z", "b047"],
+      ["2024-01-01T00:48:00Z", "b048"],
+      ["2024-01-01T00:49:00Z", "b049"],
+      ["2024-01-01T00:50:00Z", "b050"],
+      ["2024-01-01T00:51:00Z", "b051"],
+      ["2024-01-01T00:52:00Z", "b052"],
+      ["2024-01-01T00:53:00Z", "b053"],
+      ["2024-01-01T00:54:00Z", "b054"],
+      ["2024-01-01T00:55:00Z", "b055"],
+      ["2024-01-01T00:56:00Z", "b056"],
+      ["2024-01-01T00:57:00Z", "b057"],
+      ["2024-01-01T00:58:00Z", "b058"],
+      ["2024-01-01T00:59:00Z", "b059"],
+      ["2024-01-01T01:00:00Z", "b060"],
+      ["2024-01-01T01:01:00Z", "b061"],
+      ["2024-01-01T01:02:00Z", "b062"],
+      ["2024-01-01T01:03:00Z", "b063"],
+      ["2024-01-01T01:04:00Z", "b064"],
+      ["2024-01-01T01:05:00Z", "b065"],
+      ["2024-01-01T01:06:00Z", "b066"],
+      ["2024-01-01T01:07:00Z", "b067"],
+      ["2024-01-01T01:08:00Z", "b068"],
+      ["2024-01-01T01:09:00Z", "b069"],
+      ["2024-01-01T01:10:00Z", "b070"],
+      ["2024-01-01T01:11:00Z", "b071"],
+      ["2024-01-01T01:12:00Z", "b072"],
+      ["2024-01-01T01:13:00Z", "b073"],
+      ["2024-01-01T01:14:00Z", "b074"],
+      ["2024-01-01T01:15:00Z", "b075"],
+      ["2024-01-01T01:16:00Z", "b076"],
+      ["2024-01-01T01:17:00Z", "b077"],
+      ["2024-01-01T01:18:00Z", "b078"],
+      ["2024-01-01T01:19:00Z", "b079"],
+      ["2024-01-01T01:20:00Z", "b080"],
+      ["2024-01-01T01:21:00Z", "b081"],
+      ["2024-01-01T01:22:00Z", "b082"],
+      ["2024-01-01T01:23:00Z", "b083"],
+      ["2024-01-01T01:24:00Z", "b084"],
+      ["2024-01-01T01:25:00Z", "b085"],
+      ["2024-01-01T01:26:00Z", "b086"],
+      ["2024-01-01T01:27:00Z", "b087"],
+      ["2024-01-01T01:28:00Z", "b088"],
+      ["2024-01-01T01:29:00Z", "b089"],
+      ["2024-01-01T01:30:00Z", "b090"],
+      ["2024-01-01T01:31:00Z", "b091"],
+      ["2024-01-01T01:32:00Z", "b092"],
+      ["2024-01-01T01:33:00Z", "b093"],
+      ["2024-01-01T01:34:00Z", "b094"],
+      ["2024-01-01T01:35:00Z", "b095"],
+      ["2024-01-01T01:36:00Z", "b096"],
+      ["2024-01-01T01:37:00Z", "b097"],
+      ["2024-01-01T01:38:00Z", "b098"],
+      ["2024-01-01T01:39:00Z", "b099"],
+      ["2024-01-01T01:40:00Z", "b100"],
+      ["2024-01-01T01:41:00Z", "b101"],
+      ["2024-01-01T01:42:00Z", "b102"],
+      ["2024-01-01T01:43:00Z", "b103"],
+      ["2024-01-01T01:44:00Z", "b104"],
+      ["2024-01-01T01:45:00Z", "b105"],
+      ["2024-01-01T01:46:00Z", "b106"],
+      ["2024-01-01T01:47:00Z", "b107"],
+      ["2024-01-01T01:48:00Z", "b108"],
+      ["2024-01-01T01:49:00Z", "b109"],
+      ["2024-01-01T01:50:00Z", "b110"],
+      ["2024-01-01T01:51:00Z", "b111"],
+      ["2024-01-01T01:52:00Z", "b112"],
+      ["2024-01-01T01:53:00Z", "b113"],
+      ["2024-01-01T01:54:00Z", "b114"],
+      ["2024-01-01T01:55:00Z", "b115"],
+      ["2024-01-01T01:56:00Z", "b116"],
+      ["2024-01-01T01:57:00Z", "b117"],
+      ["2024-01-01T01:58:00Z", "b118"],
+      ["2024-01-01T01:59:00Z", "b119"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "invalid_items",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "v1"],
+      {
+       "played_at": "2024-01-01T00:01:00Z",
+       "track": {"id": null, "uri": "spotify:track:x", "name": "NoId"},
+       "context": {}
+      },
+      {
+       "played_at": "2024-01-01T00:02:00Z",
+       "track": {"id": "v3", "uri": null, "name": "NoUri"},
+       "context": {}
+      },
+      {
+       "played_at": "2024-01-01T00:03:00Z",
+       "track": null,
+       "context": {}
+      },
+      {
+       "played_at": null,
+       "track": {"id": "v5", "uri": "spotify:track:v5"},
+       "context": {}
+      }
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "empty_items",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": []
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "no_items_key",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": {}
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "capacity_truncate",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["c1", "C1", "A"],
+     ["c2", "C2", "A"],
+     ["c3", "C3", "A"]
+    ],
+    "plays": [
+     [1, "c1"],
+     [2, "c1"],
+     [3, "c2"],
+     [4, "c2"],
+     [5, "c3"]
+    ],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "c1"],
+      ["2024-01-01T00:01:00Z", "c2"],
+      ["2024-01-01T00:02:00Z", "c3"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {"freq1": 9999},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "capacity_full",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["c1", "C1", "A"]
+    ],
+    "plays": [
+     [1, "c1"]
+    ],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "c1"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {"freq1": 10000},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "cache_refresh",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["r1", "R1", "A"]
+    ],
+    "plays": [
+     [1, "r1"]
+    ],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {}
+   },
+   "spotify": {
+    "tracks": {
+     "t1": {
+      "name": "Song One",
+      "artists": [
+       ["a1", "Artist One"]
+      ],
+      "album": "Alb",
+      "release_date": "2020-01-01",
+      "explicit": true,
+      "popularity": 50,
+      "isrc": "US1",
+      "duration_ms": 1000
+     },
+     "t2": {
+      "name": "Song Two",
+      "artists": [
+       ["a1", "Artist One"],
+       ["a2", "Tyler, the Creator"]
+      ],
+      "album": "Alb2",
+      "release_date": "2021",
+      "explicit": false,
+      "popularity": 0,
+      "isrc": null,
+      "duration_ms": 2000
+     },
+     "t3": {
+      "name": "Song Three",
+      "artists": [
+       ["a3", "Known Artist"]
+      ],
+      "album": null,
+      "explicit": null
+     },
+     "t4": {
+      "name": "Canción",
+      "artists": [
+       ["a4", "Música"],
+       ["a5", "Missing From API"]
+      ],
+      "album": "Álbum"
+     }
+    },
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "r1"],
+      ["2024-01-01T00:01:00Z", "t2"],
+      ["2024-01-01T00:02:00Z", "t2"]
+     ]
+    },
+    "playlist_items": {
+     "freq1": ["r1", "t1", "f000", "f001", "f002", "f003", "f004", "f005", "f006", "f007", "f008", "f009", "f010", "f011", "f012", "f013", "f014", "f015", "f016", "f017", "f018", "f019", "f020", "f021", "f022", "f023", "f024", "f025", "f026", "f027", "f028", "f029", "f030", "f031", "f032", "f033", "f034", "f035", "f036", "f037", "f038", "f039", "f040", "f041", "f042", "f043", "f044", "f045", "f046", "f047", "f048", "f049", "f050", "f051", "f052", "f053", "f054", "f055", "f056", "f057", "f058", "f059", "f060", "f061", "f062", "f063", "f064", "f065", "f066", "f067", "f068", "f069", "f070", "f071", "f072", "f073", "f074", "f075", "f076", "f077", "f078", "f079", "f080", "f081", "f082", "f083", "f084", "f085", "f086", "f087", "f088", "f089", "f090", "f091", "f092", "f093", "f094", "f095", "f096", "f097", "f098", "f099", "f100", "f101", "f102", "f103", "f104", "f105", "f106", "f107", "f108", "f109", "f110", "f111", "f112", "f113", "f114", "f115", "f116", "f117", "f118", "f119", "f120", "f121", "f122", "f123", "f124", "f125", "f126", "f127", "f128", "f129", "f130", "f131", "f132", "f133", "f134", "f135", "f136", "f137", "f138", "f139", "f140", "f141", "f142", "f143", "f144", "f145", "f146", "f147", "f148", "f149", "f150", "f151", "f152", "f153", "f154", "f155", "f156", "f157", "f158", "f159", "f160", "f161", "f162", "f163", "f164", "f165", "f166", "f167", "f168", "f169", "f170", "f171", "f172", "f173", "f174", "f175", "f176", "f177", "f178", "f179", "f180", "f181", "f182", "f183", "f184", "f185", "f186", "f187", "f188", "f189", "f190", "f191", "f192", "f193", "f194", "f195", "f196", "f197", "f198", "f199", "f200", "f201", "f202", "f203", "f204", "f205", "f206", "f207", "f208", "f209", "f210", "f211", "f212", "f213", "f214", "f215", "f216", "f217", "f218", "f219", "f220", "f221", "f222", "f223", "f224", "f225", "f226", "f227", "f228", "f229", "t1"]
+    },
+    "playlist_total": {"freq1": 233},
+    "artists": {
+     "a1": {
+      "name": "Artist One",
+      "genres": ["bollywood", "filmi"],
+      "popularity": 60,
+      "followers": 1000
+     },
+     "a2": {
+      "name": "Tyler, the Creator",
+      "genres": [],
+      "popularity": 10,
+      "followers": 5
+     },
+     "a4": {
+      "name": "Música",
+      "genres": ["música mexicana", "j-pop 🎵"],
+      "popularity": 30,
+      "followers": 42
+     }
+    },
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "cache_stale",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 90000000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "s2"]
+     ]
+    },
+    "playlist_items": {
+     "freq1": ["s1"]
+    },
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "failure",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [],
+    "plays": [],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": []
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": true,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "min_plays_5",
+   "job": "sync",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 5,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["m1", "M1", "A"],
+     ["m2", "M2", "A"]
+    ],
+    "plays": [
+     [1, "m1"],
+     [2, "m1"],
+     [3, "m1"],
+     [4, "m1"],
+     [10, "m2"],
+     [11, "m2"],
+     [12, "m2"]
+    ],
+    "playlist_tracks": [],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": [
+      ["2024-01-01T00:00:00Z", "m1"],
+      ["2024-01-01T00:01:00Z", "m2"]
+     ]
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "sync_full",
+   "job": "sync_full",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["u5", "U5", "A"],
+     ["u1", "U1", "A"],
+     ["u2", "U2", "A"],
+     ["u3", "U3", "A"],
+     ["u4", "U4", "A"]
+    ],
+    "plays": [
+     [1, "u1"],
+     [2, "u1"],
+     [3, "u1"],
+     [4, "u1"],
+     [5, "u1"],
+     [10, "u2"],
+     [11, "u2"],
+     [12, "u3"],
+     [20, "u4"],
+     [21, "u4"],
+     [22, "u4"]
+    ],
+    "playlist_tracks": [
+     ["__liked__", "u1"],
+     ["freq1", "u2"]
+    ],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": []
+    },
+    "playlist_items": {},
+    "playlist_total": {"freq1": 10},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "sync_full_no_frequent",
+   "job": "sync_full",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": null,
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["u1", "U1", "A"],
+     ["u2", "U2", "A"]
+    ],
+    "plays": [],
+    "playlist_tracks": [
+     ["__liked__", "u2"]
+    ],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": []
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  },
+  {
+   "name": "sync_full_nothing_missing",
+   "job": "sync_full",
+   "runs": 1,
+   "config": {
+    "all_playlist_id": "all1",
+    "frequent_playlist_id": "freq1",
+    "frequent_min_plays": 2,
+    "recently_played_limit": 50,
+    "artist_discovery": {"plays_per_song_threshold": 20, "songs_over_threshold": 15, "total_streams_threshold": 1500, "alt_song_count": 60, "alt_streams_threshold": 500, "min_plays_per_track": 30, "max_tracks_per_playlist": 50, "min_tracks_per_playlist": 10},
+    "hindi_favorites_playlist_id": null,
+    "hindi_favorites_min_plays": 5
+   },
+   "seed": {
+    "tracks": [
+     ["u1", "U1", "A"]
+    ],
+    "plays": [],
+    "playlist_tracks": [
+     ["__liked__", "u1"]
+    ],
+    "artists": [],
+    "track_artists": [],
+    "playlists": [],
+    "playlist_removals": [],
+    "playlist_exclusions": [],
+    "state": {"cursor_after_ms:all1": "1000"},
+    "state_age_ms": {"playlist_cache_refreshed_ms:freq1": 3600000}
+   },
+   "spotify": {
+    "tracks": {},
+    "recently_played": {
+     "default": []
+    },
+    "playlist_items": {},
+    "playlist_total": {},
+    "artists": {},
+    "recently_played_error": false,
+    "missing_playlists": []
+   }
+  }
+ ]
+}
