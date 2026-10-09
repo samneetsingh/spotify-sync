@@ -1,73 +1,109 @@
-## Spotify Automation
+# spotify-sync
 
-Local-first ingestion of your Spotify recently played feed into SQLite, plus an "All tracks" playlist builder. Data stays in `data/spotify.db`; playlists are built from the DB, not from live history calls.
+A Cloudflare Worker that keeps your Spotify library tidy from your listening history:
 
-### Prereqs
-- Python 3.12+
-- Spotify app with OAuth credentials:
-  - Redirect URI should be HTTPS (e.g., `https://example.com/callback`). Plain `http` is only allowed for explicit loopback IPs like `http://127.0.0.1:PORT` or `http://[::1]:PORT` (not `localhost`). Add the URI to the Spotify app settings.
-  - Set env vars: `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REDIRECT_URI`, `SPOTIFY_ALL_PLAYLIST_ID` (used for cursor key + legacy mirror).
-- Optional envs: `SPOTIFY_SCOPE` (default includes `user-library-modify`, `user-library-read`, `playlist-modify-private`, `user-read-recently-played`), `SPOTIFY_TOKEN_CACHE_PATH` (`data/.spotify_token_cache.json`), `SPOTIFY_FREQUENT_PLAYLIST_ID` (playlist for frequent songs), `FREQUENT_MIN_PLAYS` (default `2`), `DB_LOCAL_PATH` (`data/spotify.db`), `LOG_LEVEL`.
-  Logging: `LOG_FILE` (default `data/logs/spotify.log`), `LOG_RETENTION_DAYS` (default `7`).
+- **Every 10 minutes**: records recently played tracks in D1, adds new tracks to **Liked Songs**, and adds tracks with enough plays to a **frequent** playlist.
+- **03:00 UTC**: creates and fills **per-artist playlists** for artists you play a lot, respects tracks you remove, and stops managing playlists you delete.
+- **04:00 UTC**: fills a **Hindi/Desi favorites** playlist based on artist genres.
 
-Copy `.env.example` (or create `.env`) with the above values; `python-dotenv` will load it.
+All state lives in a D1 database (plays, tracks, artists, playlist contents). Playlists are built from that history, not from live API calls.
 
-### Bootstrap OAuth
-Runs the OAuth flow and writes the token cache (refresh token included) to `SPOTIFY_TOKEN_CACHE_PATH`.
+## Setup
+
 ```bash
-poetry run token fetch
-# or: python scripts/bootstrap_oauth.py
+npm install
+cp .dev.vars.example .dev.vars   # fill in Spotify app credentials
+npm run token                    # browser login; stores the refresh token in D1
+npm test
 ```
-You’ll be prompted to log in/approve; the token is cached for future runs.
 
-Token helpers:
+The Spotify app's redirect URI must be a loopback URL such as `http://127.0.0.1:8888/callback` (Spotify rejects `localhost`).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm test` | Unit, parity and write-mode tests (local simulated D1, mocked Spotify) |
+| `npm run typecheck` | Type-checks the Worker and the scripts |
+| `npm run dev` | Runs the Worker locally in `dry_run` against the **test** D1; trigger a job with `curl "http://localhost:8787/__scheduled?cron=*/10+*+*+*+*"` |
+| `npm run deploy` | Deploys to production (normally done by Workers Builds on push to `main`) |
+| `npm run token` | Spotify login; writes the refresh token to D1 (`-- --db <name>` for another DB) |
+| `npm run import-history -- <dir>` | Imports a Spotify privacy export (Extended Streaming History JSON), then fetches artist credits and metadata. `--dry-run` only parses. |
+| `npm run live-write-test` | Creates, fills and deletes a throwaway playlist to check real Spotify writes |
+
+## Configuration
+
+`wrangler.toml` holds everything non-secret: cron schedules, the D1 binding, playlist IDs, thresholds (`FREQUENT_MIN_PLAYS`), and the alert email binding.
+
+Secrets are set with `npx wrangler secret put <NAME>`:
+
+- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
+- `SYNC_FULL_SECRET` (only needed for `/sync-full`)
+
+Locally, the same names go in `.dev.vars`.
+
+The Spotify refresh token is **not** a secret binding. It lives in the D1 `state` table so the Worker can save rotated tokens itself.
+
+**Write modes** (`WRITE_MODE` var):
+
+| Mode | Spotify writes | D1 state writes |
+|---|---|---|
+| `live` | yes | yes |
+| `shadow` | no | yes |
+| `dry_run` | no | no |
+
+In every mode the Worker still records plays and track metadata, and every Spotify write (or would-be write) is logged in the `worker_actions` table.
+
+## Alerts
+
+Failures email `ALERT_EMAIL_TO` through Cloudflare Email Service:
+
+- **A job throws:** you get an immediate alert, a reminder every 6 hours while it keeps failing, and a note when it recovers.
+- **Syncs stop for more than 45 minutes:** you get a "sync resumed after a gap" email on the first run afterwards. While crons aren't firing at all, nothing can send mail; the gap email arrives once they resume.
+
+An expired Spotify login shows up as a failing sync, and the email tells you to run `npm run token`.
+
+## Maintenance
+
+**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). The Worker has no public URL, so run it on Cloudflare's edge against production:
+
 ```bash
-poetry run token info   # show cache path
-poetry run token clear  # delete cached token
+npx wrangler dev --remote          # uses production bindings and .dev.vars
+curl -X POST http://localhost:8787/sync-full \
+  -H "Authorization: Bearer $(grep '^SYNC_FULL_SECRET=' .dev.vars | cut -d= -f2-)"
 ```
 
-### Commands
+**Changing or removing the Worker.** Never delete a Worker while its crons are live:
+
+1. Set `crons = []` and deploy.
+2. Wait about 15 minutes.
+3. Delete the Worker.
+
+Deleting with live crons once left an orphaned trigger firing and stopped cron dispatch for the whole account for about 2 hours (see `docs/migration/PROGRESS.md`).
+
+**Spotify API.** The Worker uses the long-standing endpoints: `PUT /me/tracks`, `POST /playlists/{id}/tracks`, batch `GET /artists`. The newer `/me/library` endpoints returned 400/405 when tested in October 2026.
+
+**Database export / rollback.**
+
 ```bash
-# create/upgrade schema
-poetry run spotify migrate
-
-# ingest recently played + update All playlist
-poetry run spotify sync
-# include all DB tracks not yet in the playlist (e.g., after history import)
-poetry run spotify sync --full
-
-Note: Spotify playlists max out at ~10k items. If you hit the limit, `sync --full`
-will skip additions; remove items or target another playlist.
-
-Behavior:
-- Every sync adds new tracks to **Liked Songs** (and stores them in SQLite).
-- Optional frequent-playlist: set `SPOTIFY_FREQUENT_PLAYLIST_ID`; tracks with at least `FREQUENT_MIN_PLAYS` total plays (default 2) are added to that playlist.
-- A legacy mirror to `SPOTIFY_ALL_PLAYLIST_ID` is maintained for dedupe/compat but can hit the 10k limit.
-
-Logging:
-- Console output plus rotating file logs at `data/logs/spotify.log` (configurable via `LOG_FILE`), rotated nightly with 7-day retention (configurable via `LOG_RETENTION_DAYS`).
-
-# explicitly call the feature wrapper (currently same as sync)
-poetry run spotify run-feature all_playlist
-
-# cache existing playlist contents into DB (avoid duplicate adds)
-poetry run spotify backfill-playlist-cache
-
-# import a Spotify history JSON export (file or directory of JSON files)
-poetry run spotify import-history path/to/history.json
-poetry run spotify import-history path/to/history_folder
-```
-`migrate` only needs `DB_LOCAL_PATH`. `sync` requires all Spotify env vars plus a valid token cache.
-
-### Scheduling
-Run `sync` every 10–15 minutes via cron/systemd/containers/n8n. Example cron:
-```
-*/10 * * * * cd /path/to/spotify-automation && /usr/bin/env bash -lc 'python -m src.main sync'
+npx wrangler d1 export spotify-sync --remote --output=data/export.sql
+sqlite3 data/restored.db < data/export.sql
+scripts/verify-counts.sh data/restored.db spotify-sync   # must exit 0
 ```
 
-### Development & Tests
-Install deps (`pip install -e .` or use Poetry), then run:
-```bash
-pytest
+## Layout
+
 ```
-No tests hit the Spotify API; they use in-memory mocks and temporary SQLite files.
+src/
+  index.ts            cron dispatcher + /sync-full; runs each job with alerts + D1 query count logging
+  alerts.ts           failure / recovery / sync-gap emails
+  config.ts, env.ts   typed config from wrangler.toml vars and secrets
+  jobs/               sync, artist-playlists, hindi-favorites, playlist-cache backfill
+  db/                 schema migrations, bulk json_each queries, state, query counter
+  spotify/            fetch-based client (token refresh, retries, write gating), types, parsers
+scripts/              local tools (token, import-history, live-write-test, verify-counts)
+test/                 vitest (@cloudflare/vitest-plugin); parity/ holds frozen fixtures
+docs/migration/       how this was ported from the original Python/Docker service
+```
+
+The project started as a Python service on a home server (Docker + cron + SQLite). It was ported to this Worker in October 2026; the Python code is in git history before that point.

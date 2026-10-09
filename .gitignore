@@ -1,32 +1,16 @@
-# ---------- Python ----------
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.eggs/
-.pytest_cache/
+# Dependencies / build
+node_modules/
+dist/
+.wrangler/
 
-# ---------- Virtualenv ----------
-.venv/
-env/
-venv/
-
-# ---------- Environment ----------
+# Secrets and local config (never commit)
+.dev.vars
 .env
 
-# ---------- Runtime Data (DO NOT COMMIT) ----------
-data/*.db
-data/*.db-*
-data/*.db.bak.*
-data/*.sqlite*
-data/logs/
-data/.spotify_token_cache*
-data/*.snapshot.db
-data/streaming-history/*/
+# Local data: DB copies, backups, token caches, privacy exports
+data/
 
-# ---------- OS / Editor ----------
+# OS / editor
 .DS_Store
 .idea/
 .vscode/

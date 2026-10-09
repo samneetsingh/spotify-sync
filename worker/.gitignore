@@ -1,6 +1,0 @@
-node_modules/
-dist/
-.wrangler/
-audit-results.json
-data/
-.dev.vars
