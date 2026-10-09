@@ -34,6 +34,15 @@ SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
 FREQUENT_MIN_PLAYS = "5"
 SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
 
+# Failure alerts (src/alerts.ts). The binding can only send to this one address.
+ALERT_FROM = "spotify-sync@example.com"
+ALERT_EMAIL_TO = "spotify-sync@example.com"
+
+[[send_email]]
+name = "ALERT_EMAIL"
+destination_address = "spotify-sync@example.com"
+allowed_sender_addresses = ["spotify-sync@example.com"]
+
 # Secrets (`wrangler secret put <NAME>`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
 
