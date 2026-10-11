@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 
 export default defineConfig({
@@ -9,4 +9,6 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.toml" },
     }),
   ],
+  // Git worktrees for parallel work live under .claude/worktrees; their tests run in their own checkout.
+  test: { exclude: [...configDefaults.exclude, ".claude/**"] },
 });
