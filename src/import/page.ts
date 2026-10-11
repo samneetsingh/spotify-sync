@@ -45,8 +45,16 @@ function flash(url: URL | undefined): Notice | undefined {
 }
 
 const plays = (n: number) => `${fmt(n)} play${n === 1 ? "" : "s"}`;
-/** "Oct 11, 2026, 3:20 PM UTC": the page doesn't load settings, so times are UTC like the export's. */
-const when = (ms: number) => new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(ms) + " UTC";
+/** "Oct 11, 2026, 3:20 PM PDT" in the owner's time zone (the timeZone setting), like the rest of the dashboard. */
+function when(ms: number, timeZone: string): string {
+  const format = (tz: string) =>
+    new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: tz, timeZoneName: "short" }).format(ms);
+  try {
+    return format(timeZone);
+  } catch {
+    return format("UTC");
+  }
+}
 
 // ---------------------------------------------------------------------------- upload
 
@@ -159,12 +167,12 @@ ${understand}
 
 // ---------------------------------------------------------------------------- other states
 
-function progressCard(title: string, row: ImportRow, cancellable: boolean): string {
+function progressCard(title: string, row: ImportRow, cancellable: boolean, timeZone: string): string {
   const entries = Object.values(row.entries);
   const read = entries.filter((e) => e.done).length;
   const facts: Array<[string, string]> = [["Status", row.progress ?? "Starting"]];
   if (row.status === "reading" && entries.length) facts.push(["Files read", `${read} of ${entries.length}`]);
-  facts.push(["Updated", when(row.updated_at)]);
+  facts.push(["Updated", when(row.updated_at, timeZone)]);
   return ui.card(
     title,
     `${ui.facts(facts)}<p class="note">This page refreshes itself. You can close it: we'll email you when ${row.status === "applying" ? "it's done" : "it's ready to review"}.</p>`,
@@ -185,7 +193,7 @@ function failedCard(row: ImportRow): string {
   });
 }
 
-function lastImportCard(row: ImportRow): string {
+function lastImportCard(row: ImportRow, timeZone: string): string {
   const p = row.preview;
   if (row.status === "done" && p) {
     return ui.card(
@@ -195,7 +203,7 @@ function lastImportCard(row: ImportRow): string {
         ["Plays added", fmt(p.totals[0])],
         ["Plays completed", fmt(p.totals[1])],
         ["Plays removed", fmt(p.totals[2])],
-        ["Finished", when(row.updated_at)],
+        ["Finished", when(row.updated_at, timeZone)],
       ]),
       { id: "last", headHtml: ui.pill("ok", "Imported") },
     );
@@ -213,7 +221,7 @@ export interface ImportPageOptions {
 
 /** GET /import (and the approve form re-rendered with errors). */
 export async function importPage(env: Env, db: D1Database, session: Session, opts: ImportPageOptions = {}): Promise<Response> {
-  const row = await latestImport(db);
+  const [row, { values }] = await Promise.all([latestImport(db), loadSettings(db, env)]);
   const notice = flash(opts.url);
   const page = (body: string, extra: { refresh?: boolean; scripts?: boolean } = {}) =>
     renderPage({
@@ -229,24 +237,23 @@ export async function importPage(env: Env, db: D1Database, session: Session, opt
 
   switch (row?.status) {
     case "reading":
-      return page(progressCard("Reading your export", row, true), { refresh: true });
+      return page(progressCard("Reading your export", row, true, values.timeZone), { refresh: true });
     case "applying":
-      return page(progressCard("Importing", row, false), { refresh: true });
+      return page(progressCard("Importing", row, false, values.timeZone), { refresh: true });
     case "review":
       if (row.preview) {
-        const { values } = await loadSettings(db, env);
         return page(reviewBody(row, row.preview, opts.form ?? DEFAULT_APPROVE_FORM, opts.errors ?? [], { liked: values.liked, frequent: values.frequent }));
       }
-      return page(progressCard("Preparing the review", row, true), { refresh: true });
+      return page(progressCard("Preparing the review", row, true, values.timeZone), { refresh: true });
     case "failed":
       return page(failedCard(row));
     default:
-      return page(uploadCard(row) + (row ? lastImportCard(row) : ""), { scripts: true });
+      return page(uploadCard(row) + (row ? lastImportCard(row, values.timeZone) : ""), { scripts: true });
   }
 }
 
-/** The home page's Import card. Shown only when IMPORTS and IMPORT_WORKFLOW are bound. */
-export async function importCard(db: D1Database): Promise<string> {
+/** The home page's Import card, times in `timeZone`. Shown only when IMPORTS and IMPORT_WORKFLOW are bound. */
+export async function importCard(db: D1Database, timeZone = "UTC"): Promise<string> {
   const row = await latestImport(db);
   const open = (label: string, variant: "primary" | "secondary" = "secondary") => ui.linkButton("/import", label, variant);
   switch (row?.status) {
@@ -262,7 +269,7 @@ export async function importCard(db: D1Database): Promise<string> {
     case "failed":
       return ui.card("History import", `<p>The import stopped. Retry picks up where it stopped.</p>`, { id: "import", headHtml: ui.pill("bad", "Stopped"), actionsHtml: open("Open the import") });
     case "done":
-      return ui.card("History import", `<p>Imported ${esc(row.preview ? spanText(row.preview.from, row.preview.to) : "your history")}, on ${esc(when(row.updated_at))}.</p>`, {
+      return ui.card("History import", `<p>Imported ${esc(row.preview ? spanText(row.preview.from, row.preview.to) : "your history")}, on ${esc(when(row.updated_at, timeZone))}.</p>`, {
         id: "import",
         headHtml: ui.pill("ok", "Imported"),
         actionsHtml: open("Import again"),

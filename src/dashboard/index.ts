@@ -71,7 +71,7 @@ async function homePage(env: Env, session: Session, notice: Notice | undefined):
   let importHtml = "";
   if (importEnabled(env)) {
     try {
-      importHtml = await importCard(db);
+      importHtml = await importCard(db, settings.values.timeZone);
     } catch (err) {
       // The rest of the home page still works without the import card.
       console.error(JSON.stringify({ dashboard: "import card failed", error: err instanceof Error ? err.message : String(err) }));

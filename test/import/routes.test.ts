@@ -7,7 +7,7 @@ import type { Session } from "../../src/auth";
 import { migrate } from "../../src/db/schema";
 import { esc } from "../../src/email/layout";
 import type { Env } from "../../src/env";
-import { handleImportRoutes } from "../../src/import";
+import { handleImportRoutes, importCard } from "../../src/import";
 import { LIMITS, PART_SIZE } from "../../src/import/limits";
 import { getImport, type Preview } from "../../src/import/store";
 import { LIKED_SONGS_WARNING } from "../../src/settings";
@@ -197,6 +197,19 @@ describe("start", () => {
       expect.objectContaining({ kind: "email", summary: expect.stringContaining("Your history import stopped") }),
       { kind: "import", ok: 1, summary: "History import cancelled: discarded after it stopped" },
     ]);
+  });
+});
+
+describe("finished import", () => {
+  it("shows the last import with the time in the owner's time zone, on the page and the home card", async () => {
+    const finished = Date.UTC(2026, 9, 11, 22, 15);
+    await insertImport(db, { status: "done", preview: PREVIEW, createdAt: finished });
+    await db.prepare("INSERT INTO settings (key, value) VALUES ('timeZone', '\"America/Los_Angeles\"')").run();
+    const html = await (await call("/import")).text();
+    expect(html).toContain("Last import");
+    expect(html).toContain("Oct 11, 2026, 3:15 PM PDT");
+    expect(await importCard(db, "America/Los_Angeles")).toContain("Oct 11, 2026, 3:15 PM PDT");
+    expect(await importCard(db)).toContain("Oct 11, 2026, 10:15 PM UTC");
   });
 });
 
