@@ -9,9 +9,9 @@
 // Output: --out, default wrangler.generated.toml. It must sit in the repo root, because the
 // template's paths (main, assets) are relative to the config file.
 // Keys and example values: deploy.config.example.json. Keys in DEFAULTS may be left out.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = resolve(ROOT, "wrangler.toml");
@@ -89,7 +89,15 @@ function main(argv) {
   if (unused.length) console.warn(`Ignored keys the template doesn't use: ${unused.join(", ")}`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+// Run as a script (not imported, as vitest.config.ts does). realpath: /tmp vs /private/tmp etc.
+const isMain = () => {
+  try {
+    return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+};
+if (isMain()) {
   try {
     main(process.argv.slice(2));
   } catch (err) {

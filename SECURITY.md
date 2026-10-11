@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security issues privately through GitHub's **Report a vulnerability** button (Security tab, private vulnerability reporting) rather than in a public issue. Include what you found, how to reproduce it, and its impact. You should hear back within a week.
+Please report security issues privately through GitHub's **Report a vulnerability** button (Security tab, private vulnerability reporting) rather than in a public issue. Include what you found, how to reproduce it, and its impact. Please allow a few days for a reply.
 
 This is a personal project maintained in spare time, provided as is (see [LICENSE](LICENSE)); there is no bug bounty.
 
