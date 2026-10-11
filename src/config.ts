@@ -17,6 +17,7 @@ export interface HistoryPlaylistsConfig {
   forgottenMinPlays: number;
   forgottenIdleDays: number;
   forgottenSize: number;
+  holidayMinPlays: number;
 }
 
 export interface Config {
@@ -68,6 +69,7 @@ export function loadConfig(env: Env): Config {
       forgottenMinPlays: 20,
       forgottenIdleDays: 365,
       forgottenSize: 50,
+      holidayMinPlays: 3,
     },
   };
 }

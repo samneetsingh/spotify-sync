@@ -2,23 +2,20 @@
 // - On This Day, daily: what you played on today's local date in each past year.
 // - Forgotten Favorites, weekly: songs you played a lot but not in over a year.
 //
-// Each playlist is created on its first live run and its id kept in `state`
-// (`playlist:<key>`). Setting that value to "off" stops it; so does deleting the
-// playlist in Spotify (it leaves the user's library), and it is never recreated.
-// `playlist:<key>:period` holds the day/week last written, so reruns are no-ops.
+// Both are owned playlists (see owned-playlists.ts), rewritten whole with
+// replacePlaylistItems. `playlist:<key>:period` holds the day/week last written, so
+// reruns are no-ops.
 
 import type { Config } from "../config";
 import { forgottenTracks, recordActions, tracksPlayedIn, type PlaylistTrackRef } from "../db/queries";
 import { getState, setState } from "../db/state";
 import type { SpotifyClient } from "../spotify/client";
-import { followedPlaylistIds } from "../spotify/playlist";
 import { addDays, formatDate, isoWeek, isValidDate, zonedDate, zonedMidnight, type LocalDate } from "../utils/time";
+import { ensurePlaylist, followChecker, PLACEHOLDER_PREFIX, playlistStateKey, type OwnedPlaylist } from "./owned-playlists";
 
 const MAX_ITEMS = 100; // what one replace call accepts
 const FIRST_YEAR = 2008; // Spotify launched; no plays before this
 const DAY_MS = 86_400_000;
-/** createPlaylist returns this prefix outside live mode; such ids are never saved. */
-const PLACEHOLDER_PREFIX = "would-create:";
 
 export interface HistoryPlaylistsResult {
   /** Tracks written per playlist; null when skipped (switched off, or already current). */
@@ -26,14 +23,10 @@ export interface HistoryPlaylistsResult {
   forgottenFavorites: number | null;
 }
 
-interface PlaylistSpec {
-  key: string;
-  name: string;
-  description: string;
+interface PlaylistSpec extends OwnedPlaylist {
   /** The day or week this run writes; the playlist is only rewritten when it changes. */
   period: string;
   pick: () => Promise<PlaylistTrackRef[]>;
-  isFollowed: (playlistId: string) => Promise<boolean>;
 }
 
 export async function runHistoryPlaylists(
@@ -45,24 +38,21 @@ export async function runHistoryPlaylists(
   const h = cfg.historyPlaylists;
   const today = zonedDate(now, cfg.timeZone);
   const week = isoWeek(today);
-  let followed: Promise<Set<string>> | undefined; // fetched once, only if an existing playlist needs writing
-  const isFollowed = async (id: string) => (await (followed ??= followedPlaylistIds(sp))).has(id);
+  const isFollowed = followChecker(sp); // only consulted when an existing playlist needs writing
   try {
-    const onThisDay = await refresh(cfg, db, sp, {
+    const onThisDay = await refresh(cfg, db, sp, isFollowed, {
       key: "on_this_day",
       name: "On This Day",
       description: "What you played on this date in years past, oldest first. Refreshed every morning by spotify-sync.",
       period: formatDate(today),
       pick: () => onThisDayTracks(db, today, cfg),
-      isFollowed,
     });
-    const forgottenFavorites = await refresh(cfg, db, sp, {
+    const forgottenFavorites = await refresh(cfg, db, sp, isFollowed, {
       key: "forgotten_favorites",
       name: "Forgotten Favorites",
       description: `Songs you've played ${h.forgottenMinPlays}+ times but not in over a year. A new set every Monday, by spotify-sync.`,
       period: week,
       pick: () => forgottenFavoriteTracks(db, week, now - h.forgottenIdleDays * DAY_MS, cfg),
-      isFollowed,
     });
     const result = { onThisDay, forgottenFavorites };
     console.log(JSON.stringify({ job: "history-playlists", writeMode: cfg.writeMode, today: formatDate(today), ...result }));
@@ -73,26 +63,24 @@ export async function runHistoryPlaylists(
 }
 
 /** Creates the playlist if needed and replaces its tracks; returns how many, or null if skipped. */
-async function refresh(cfg: Config, db: D1Database, sp: SpotifyClient, spec: PlaylistSpec): Promise<number | null> {
+async function refresh(
+  cfg: Config,
+  db: D1Database,
+  sp: SpotifyClient,
+  isFollowed: (playlistId: string) => Promise<boolean>,
+  spec: PlaylistSpec,
+): Promise<number | null> {
   const writeState = cfg.writeMode !== "dry_run";
-  const idKey = `playlist:${spec.key}`;
-  const periodKey = `${idKey}:period`;
-  let playlistId = await getState(db, idKey);
-  if (playlistId === "off") return null;
-  if (playlistId && (await getState(db, periodKey)) === spec.period) return null;
+  const periodKey = `${playlistStateKey(spec.key)}:period`;
+  const stored = await getState(db, playlistStateKey(spec.key));
+  if (stored === "off") return null;
+  if (stored && (await getState(db, periodKey)) === spec.period) return null;
 
   const tracks = await spec.pick();
   if (!tracks.length) return 0; // keep the previous tracks rather than empty the playlist
 
-  if (!playlistId) {
-    playlistId = (await sp.createPlaylist({ name: spec.name, public: false, description: spec.description })).id;
-    if (writeState && !playlistId.startsWith(PLACEHOLDER_PREFIX)) await setState(db, idKey, playlistId);
-  } else if (!(await spec.isFollowed(playlistId))) {
-    // Deleted in Spotify (unfollowed): stop for good rather than write to a hidden playlist.
-    if (writeState) await setState(db, idKey, "off");
-    console.log(JSON.stringify({ job: "history-playlists", playlist: spec.key, switchedOff: playlistId }));
-    return null;
-  }
+  const playlistId = await ensurePlaylist(cfg, db, sp, spec, isFollowed);
+  if (!playlistId) return null;
   // Any write error fails the job (and alerts); the next run retries with the same playlist.
   await sp.replacePlaylistItems(playlistId, tracks.slice(0, MAX_ITEMS).map((t) => t.track_uri));
   if (writeState && !playlistId.startsWith(PLACEHOLDER_PREFIX)) await setState(db, periodKey, spec.period);

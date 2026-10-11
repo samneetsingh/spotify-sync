@@ -31,6 +31,12 @@ export function addDays(date: LocalDate, days: number): LocalDate {
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
+/** The first day of the month `months` after `date`'s month (negative goes back). */
+export function addMonths(date: LocalDate, months: number): LocalDate {
+  const d = new Date(Date.UTC(date.year, date.month - 1 + months, 1));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: 1 };
+}
+
 /** Whether year/month/day is a real date (Feb 29 only in leap years). */
 export function isValidDate(date: LocalDate): boolean {
   return addDays(date, 0).day === date.day;

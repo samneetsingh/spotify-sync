@@ -6,6 +6,8 @@ import { migrate } from "./db/schema";
 import { runArtistPlaylists } from "./jobs/artist-playlists";
 import { runHindiFavorites } from "./jobs/hindi-favorites";
 import { runHistoryPlaylists } from "./jobs/history-playlists";
+import { runHolidayPlaylist } from "./jobs/holiday-playlist";
+import { runMonthlyRecap } from "./jobs/monthly-recap";
 import { runSync, runSyncFull } from "./jobs/sync";
 import { SpotifyClient } from "./spotify/client";
 
@@ -18,13 +20,17 @@ async function quietly(what: string, fn: () => Promise<void>): Promise<void> {
   }
 }
 
+type Job = (config: Config, db: D1Database, sp: SpotifyClient) => Promise<unknown>;
+
+const alertConfig = (env: Env): AlertConfig => ({ binding: env.ALERT_EMAIL, from: env.ALERT_FROM, to: env.ALERT_EMAIL_TO });
+
 /**
  * Runs one job with migrations applied, emails on failure/recovery, and logs its
  * D1 query count (limit: 1,000 per invocation).
  */
 async function withJob<T>(env: Env, job: string, fn: (config: Config, db: D1Database, sp: SpotifyClient) => Promise<T>): Promise<T> {
   const { db, queries } = countingD1(env.DB);
-  const alerts: AlertConfig = { binding: env.ALERT_EMAIL, from: env.ALERT_FROM, to: env.ALERT_EMAIL_TO };
+  const alerts = alertConfig(env);
   try {
     await migrate(db);
     if (job === "sync") await quietly("sync gap check", () => checkSyncGap(db, alerts));
@@ -55,9 +61,25 @@ export default {
       case "10 4 * * *": // offset while the Python server is live (Amendment A2)
         await withJob(env, "hindi-favorites", runHindiFavorites);
         break;
-      case "5 8 * * *": // 00:05 PST / 01:05 PDT, just after local midnight for On This Day
-        await withJob(env, "history-playlists", runHistoryPlaylists);
+      case "5 8 * * *": {
+        // Daily at 00:05 PST / 01:05 PDT, just after local midnight. Separate jobs: each
+        // alerts on its own, and one failing doesn't skip the others.
+        const daily: Array<[string, Job]> = [
+          ["history-playlists", runHistoryPlaylists],
+          ["holiday-playlist", runHolidayPlaylist],
+          ["monthly-recap", (cfg, db) => runMonthlyRecap(cfg, db, alertConfig(env))],
+        ];
+        let failure: unknown;
+        for (const [job, fn] of daily) {
+          try {
+            await withJob(env, job, fn);
+          } catch (err) {
+            failure ??= err;
+          }
+        }
+        if (failure) throw failure;
         break;
+      }
       default:
         console.error(`Unknown cron: ${event.cron}`);
     }

@@ -110,4 +110,23 @@ describe("scheduled handler", () => {
     expect(sent.map((s) => s.subject)).toEqual(["[spotify-sync] sync failed"]);
     expect(sent[0]!.text).toContain("npm run token");
   });
+
+  it("runs every daily job even when one fails, then fails the invocation", async () => {
+    const { sent, cfg } = fakeEmail();
+    const testEnv = {
+      ...(env as unknown as Env),
+      SPOTIFY_ALL_PLAYLIST_ID: "all1",
+      WRITE_MODE: "live",
+      TIME_ZONE: "Not/A_Zone", // makes each job's config load throw
+      ALERT_EMAIL: cfg.binding,
+      ALERT_FROM: cfg.from,
+      ALERT_EMAIL_TO: cfg.to,
+    } as Env;
+    await expect(worker.scheduled({ cron: "5 8 * * *" } as ScheduledEvent, testEnv, {} as ExecutionContext)).rejects.toThrow(/TIME_ZONE/);
+    expect(sent.map((s) => s.subject)).toEqual([
+      "[spotify-sync] history-playlists failed",
+      "[spotify-sync] holiday-playlist failed",
+      "[spotify-sync] monthly-recap failed",
+    ]);
+  });
 });

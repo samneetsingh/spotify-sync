@@ -222,7 +222,7 @@ export function scenarioConfig(c: Json, writeMode: Config["writeMode"] = "live")
     },
     // Not part of the Python parity fixtures (Worker-only job).
     timeZone: "UTC",
-    historyPlaylists: { onThisDayPerYear: 10, forgottenMinPlays: 20, forgottenIdleDays: 365, forgottenSize: 50 },
+    historyPlaylists: { onThisDayPerYear: 10, forgottenMinPlays: 20, forgottenIdleDays: 365, forgottenSize: 50, holidayMinPlays: 3 },
   };
 }
 

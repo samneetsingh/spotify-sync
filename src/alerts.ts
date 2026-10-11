@@ -26,20 +26,32 @@ interface FailingState {
 
 const failingKey = (job: string) => `alert_failing:${job}`;
 
-export async function sendAlert(cfg: AlertConfig, subject: string, text: string): Promise<boolean> {
+export interface Email {
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/** Sends to the configured recipient. Never throws; returns whether it was sent. */
+export async function sendEmail(cfg: AlertConfig, email: Email): Promise<boolean> {
+  const { subject, text, html } = email;
   if (!cfg.binding || !cfg.from || !cfg.to) {
-    console.warn(JSON.stringify({ alert: "skipped (email not configured)", subject }));
+    console.warn(JSON.stringify({ email: "skipped (not configured)", subject }));
     return false;
   }
   try {
-    await cfg.binding.send({ from: { email: cfg.from, name: "spotify-sync" }, to: cfg.to, subject: `[spotify-sync] ${subject}`, text });
-    console.log(JSON.stringify({ alert: "sent", subject }));
+    await cfg.binding.send({ from: { email: cfg.from, name: "spotify-sync" }, to: cfg.to, subject, text, ...(html ? { html } : {}) });
+    console.log(JSON.stringify({ email: "sent", subject }));
     return true;
   } catch (err) {
     const e = err as { code?: string; message?: string };
-    console.error(JSON.stringify({ alert: "send failed", subject, code: e.code, error: e.message }));
+    console.error(JSON.stringify({ email: "send failed", subject, code: e.code, error: e.message }));
     return false;
   }
+}
+
+export async function sendAlert(cfg: AlertConfig, subject: string, text: string): Promise<boolean> {
+  return sendEmail(cfg, { subject: `[spotify-sync] ${subject}`, text });
 }
 
 /** Hints for errors the user has to fix by hand. */

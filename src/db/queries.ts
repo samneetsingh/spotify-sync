@@ -471,3 +471,161 @@ export async function forgottenTracks(db: D1Database, minPlays: number, idleSinc
     .all<TrackPlays>();
   return results;
 }
+
+/** Tracks whose lowercased title contains one of `phrases`, with at least `minPlays` plays, most played first. */
+export async function holidayTracks(db: D1Database, minPlays: number, phrases: readonly string[]): Promise<TrackPlays[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.track_id, t.track_uri, COUNT(*) AS plays
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       WHERE EXISTS (SELECT 1 FROM json_each(?2) k WHERE instr(lower(t.name), k.value) > 0)
+       GROUP BY p.track_id, t.track_uri
+       HAVING COUNT(*) >= ?1
+       ORDER BY plays DESC, p.track_id`,
+    )
+    .bind(minPlays, JSON.stringify(phrases))
+    .all<TrackPlays>();
+  return results;
+}
+
+// --- monthly recap (plays with from <= played_at_ms < to) ---
+
+export interface RecapTotals {
+  plays: number;
+  tracks: number;
+  artists: number;
+  /** Listening time: the export's ms_played, else the track's duration. */
+  ms: number;
+}
+
+export interface RecapTrack {
+  track_id: string;
+  name: string | null;
+  artists: string | null;
+  plays: number;
+}
+
+export interface RecapArtist {
+  artist_id: string;
+  name: string;
+  plays: number;
+}
+
+export async function recapTotals(db: D1Database, from: number, to: number): Promise<RecapTotals> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS plays, COUNT(DISTINCT p.track_id) AS tracks,
+              COALESCE(SUM(COALESCE(p.ms_played, t.duration_ms)), 0) AS ms,
+              (SELECT COUNT(DISTINCT ta.artist_id) FROM plays p2 JOIN track_artists ta ON ta.track_id = p2.track_id
+               WHERE p2.played_at_ms >= ?1 AND p2.played_at_ms < ?2) AS artists
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2`,
+    )
+    .bind(from, to)
+    .first<RecapTotals>();
+  return row ?? { plays: 0, tracks: 0, artists: 0, ms: 0 };
+}
+
+export async function recapTopTracks(db: D1Database, from: number, to: number, limit: number): Promise<RecapTrack[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.track_id, t.name, t.artists, COUNT(*) AS plays
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+       GROUP BY p.track_id, t.name, t.artists
+       ORDER BY plays DESC, MIN(p.played_at_ms)
+       LIMIT ?3`,
+    )
+    .bind(from, to, limit)
+    .all<RecapTrack>();
+  return results;
+}
+
+export async function recapTopArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT ta.artist_id, MAX(ta.artist_name) AS name, COUNT(*) AS plays
+       FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+       GROUP BY ta.artist_id
+       ORDER BY plays DESC, MIN(p.played_at_ms)
+       LIMIT ?3`,
+    )
+    .bind(from, to, limit)
+    .all<RecapArtist>();
+  return results;
+}
+
+/** How many tracks were played for the first time ever in the range. */
+export async function recapNewTrackCount(db: D1Database, from: number, to: number): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM (
+         SELECT track_id FROM plays WHERE played_at_ms < ?2 GROUP BY track_id HAVING MIN(played_at_ms) >= ?1
+       )`,
+    )
+    .bind(from, to)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** Artists first heard in the range, most played first. */
+export async function recapNewArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT ta.artist_id, MAX(ta.artist_name) AS name, COUNT(*) AS plays
+       FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
+       WHERE p.played_at_ms < ?2
+       GROUP BY ta.artist_id
+       HAVING MIN(p.played_at_ms) >= ?1
+       ORDER BY plays DESC, MIN(p.played_at_ms)
+       LIMIT ?3`,
+    )
+    .bind(from, to, limit)
+    .all<RecapArtist>();
+  return results;
+}
+
+/**
+ * Artists played at least `minPlays` times in the range after a break of `idleMs` or more,
+ * having had at least `minEarlierPlays` plays before it. `last_before_ms` is when the break began.
+ */
+export async function recapReturningArtists(
+  db: D1Database,
+  from: number,
+  to: number,
+  opts: { idleMs: number; minEarlierPlays: number; minPlays: number; limit: number },
+): Promise<Array<RecapArtist & { last_before_ms: number }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT ta.artist_id, MAX(ta.artist_name) AS name,
+              SUM(p.played_at_ms >= ?1) AS plays,
+              MAX(CASE WHEN p.played_at_ms < ?1 THEN p.played_at_ms END) AS last_before_ms
+       FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
+       WHERE p.played_at_ms < ?2
+       GROUP BY ta.artist_id
+       HAVING plays >= ?5 AND SUM(p.played_at_ms < ?1) >= ?4 AND last_before_ms < ?1 - ?3
+       ORDER BY plays DESC
+       LIMIT ?6`,
+    )
+    .bind(from, to, opts.idleMs, opts.minEarlierPlays, opts.minPlays, opts.limit)
+    .all<RecapArtist & { last_before_ms: number }>();
+  return results;
+}
+
+/** Which [start, end) ms range (e.g. one per local day) has the most plays, by index; earliest wins ties. */
+export async function recapBusiestRange(
+  db: D1Database,
+  ranges: Array<[number, number]>,
+): Promise<{ range_index: number; plays: number } | null> {
+  if (!ranges.length) return null;
+  return db
+    .prepare(
+      `SELECT r.key AS range_index, COUNT(*) AS plays
+       FROM json_each(?1) r
+       JOIN plays p ON p.played_at_ms >= json_extract(r.value, '$[0]') AND p.played_at_ms < json_extract(r.value, '$[1]')
+       GROUP BY r.key ORDER BY plays DESC, r.key LIMIT 1`,
+    )
+    .bind(JSON.stringify(ranges))
+    .first<{ range_index: number; plays: number }>();
+}
