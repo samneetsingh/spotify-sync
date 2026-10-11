@@ -1,13 +1,41 @@
 // Shared helpers for local maintenance scripts (run with `npx tsx scripts/<name>.ts`).
-// Credentials come from .dev.vars; the database is reached through `wrangler d1 execute`.
+// Credentials come from .dev.vars; the database is reached through `wrangler d1 execute`,
+// using the generated wrangler config (see wranglerConfig below).
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MIGRATIONS, migrationStatements } from "../src/db/schema";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const DEFAULT_DB = "spotify-sync";
 const TOKEN_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The wrangler config the scripts pass to wrangler: $WRANGLER_CONFIG (another instance's
+ * generated config), else wrangler.generated.toml from `npm run configure` when it exists.
+ * Without either, wrangler reads the wrangler.toml template and `--db` is required.
+ */
+export const wranglerConfig: string | undefined = (() => {
+  const explicit = process.env.WRANGLER_CONFIG;
+  if (explicit) {
+    if (!existsSync(resolve(ROOT, explicit))) throw new Error(`WRANGLER_CONFIG file not found: ${explicit}`);
+    return explicit;
+  }
+  return existsSync(resolve(ROOT, "wrangler.generated.toml")) ? "wrangler.generated.toml" : undefined;
+})();
+
+/**
+ * `--db <name>`, else the production database_name of the active wrangler config (the first
+ * one in the file: the template puts [[d1_databases]] before [env.test]).
+ */
+export function targetDb(): string {
+  const explicit = flag("db", "");
+  if (explicit) return explicit;
+  const name = wranglerConfig && readFileSync(resolve(ROOT, wranglerConfig), "utf8").match(/^database_name\s*=\s*"([^"]+)"/m)?.[1];
+  if (!name) throw new Error("No database: pass --db <name>, or run `npm run configure` first");
+  return name;
+}
 
 /** Parses .dev.vars (KEY=VALUE lines). */
 export function devVars(): Record<string, string> {
@@ -36,7 +64,8 @@ export function flag(name: string, fallback: string): string {
 
 function wrangler(args: string[], retried = false): string {
   try {
-    return execFileSync("npx", ["wrangler", ...args], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    const config = wranglerConfig ? ["-c", wranglerConfig] : [];
+    return execFileSync("npx", ["wrangler", ...args, ...config], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     // The bare "Command failed" hides the reason; wrangler puts it on stderr, or on stdout with --json.
     const { stderr, stdout } = err as { stderr?: string; stdout?: string };
@@ -75,6 +104,34 @@ export function lit(v: unknown): string {
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "1" : "0";
   return `'${String(v).replace(/'/g, "''")}'`;
+}
+
+/** The database's schema version; 0 for a brand-new database. */
+export function schemaVersion(db: string): number {
+  const exists = d1Rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").length > 0;
+  return exists ? Number(d1Rows<{ v: number | null }>(db, "SELECT MAX(version) AS v FROM schema_migrations")[0]?.v ?? 0) : 0;
+}
+
+/**
+ * Applies the Worker's pending migrations (src/db/schema.ts, the same statements its migrate()
+ * runs) in one atomic file, so the scripts work on a brand-new database before the first deploy.
+ */
+export function ensureSchema(db: string): void {
+  const latest = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+  const pending = MIGRATIONS.filter((m) => m.version > schemaVersion(db));
+  if (!pending.length) return;
+  const dir = mkdtempSync(join(tmpdir(), "spotify-schema-"));
+  try {
+    const file = join(dir, "schema.sql");
+    writeFileSync(file, pending.flatMap(migrationStatements).map((sql) => `${sql};`).join("\n") + "\n");
+    d1ExecFile(db, file);
+    console.log(`Applied schema v${pending.map((m) => m.version).join(", v")} to ${db}.`);
+  } catch (err) {
+    // A Worker job may have applied the same migrations meanwhile (v9's ALTER TABLEs aren't idempotent).
+    if (schemaVersion(db) < latest) throw err;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export function seedRefreshToken(db: string, token: string): void {

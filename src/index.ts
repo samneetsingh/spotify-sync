@@ -66,11 +66,11 @@ export default {
         await withJob(env, "sync", runSync);
         break;
       case "0 3 * * *":
-      case "10 3 * * *": // offset while the Python server is live (Amendment A2)
+      case "10 3 * * *": // legacy offset schedule from the side-by-side run with the Python service
         await withJob(env, "artist-playlists", runArtistPlaylists);
         break;
       case "0 4 * * *":
-      case "10 4 * * *": // offset while the Python server is live (Amendment A2)
+      case "10 4 * * *": // legacy offset schedule from the side-by-side run with the Python service
         await withJob(env, "hindi-favorites", runHindiFavorites);
         break;
       case "5 8 * * *": {

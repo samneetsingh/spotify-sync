@@ -3,7 +3,8 @@
  * enrich new tracks with artist credits and artist metadata (genres for hindi-favorites,
  * credits for artist playlists).
  *
- * Usage: npm run import-history -- <export-dir> [--db spotify-sync] [--dry-run]
+ * Usage: npm run import-history -- <export-dir> [--db <database name>] [--dry-run]
+ * The database defaults to the production one in wrangler.generated.toml (or $WRANGLER_CONFIG).
  *
  * The export is the source of truth for plays inside its span (first record to last record
  * + 30 s): afterwards D1's plays there equal the export's streams of at least 30 s. Missing
@@ -25,7 +26,7 @@ import { join } from "node:path";
 import { EXPORT_PLAY_FIELDS } from "../src/db/schema";
 import { genresJson, trackRows } from "../src/spotify/metadata";
 import type { SpotifyArtistFull, SpotifyTrack } from "../src/spotify/types";
-import { DEFAULT_DB, accessTokenFromD1, d1ExecFile, d1Rows, flag, lit, spotifyGet } from "./lib";
+import { accessTokenFromD1, d1ExecFile, d1Rows, lit, schemaVersion, spotifyGet, targetDb } from "./lib";
 
 const ROWS_PER_STATEMENT = 200; // keeps each statement well under D1's 100 KB limit
 const ROWS_PER_FILE = 20_000;
@@ -230,7 +231,7 @@ async function enrich(db: string): Promise<void> {
 async function main(): Promise<void> {
   const target = process.argv.slice(2).find((a, i, all) => !a.startsWith("--") && all[i - 1] !== "--db");
   if (!target) throw new Error("Usage: npm run import-history -- <export-dir> [--db name] [--dry-run]");
-  const db = flag("db", DEFAULT_DB);
+  const db = targetDb();
   const dryRun = process.argv.includes("--dry-run");
 
   const files = statSync(target).isDirectory()
@@ -267,8 +268,8 @@ async function main(): Promise<void> {
   const [from, to] = [first, last + SPAN_TAIL_MS];
   console.log(`Span ${new Date(from).toISOString()} .. ${new Date(to).toISOString()}: ${plays.size} plays, ${tracks.size} tracks`);
 
-  const schemaVersion = count(db, "SELECT MAX(version) FROM schema_migrations");
-  if (schemaVersion < 9) throw new Error(`${db} is at schema v${schemaVersion}; deploy the Worker first (its next job applies v9)`);
+  const version = schemaVersion(db);
+  if (version < 9) throw new Error(`${db} is at schema v${version}; run \`npm run token\` first (it applies the schema and stores the login the import needs)`);
   const current = currentPlays(db, from, to);
   const toInsert = [...plays].filter(([k]) => !current.has(k)).map(([, p]) => p);
   const toUpdate = [...plays].filter(([k]) => current.get(k) === false).map(([, p]) => p);

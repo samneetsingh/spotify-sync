@@ -6,9 +6,25 @@ dist/
 # Secrets and local config (never commit)
 .dev.vars
 .env
+# Per-instance deploy config and the wrangler configs generated from it (npm run configure)
+deploy.config*.json
+!deploy.config.example.json
+wrangler*.generated.toml
 
-# Local data: DB copies, backups, token caches, privacy exports
+# Local data: DB copies, backups, SQL dumps, token caches, privacy exports
 data/
+*.db
+*.db-*
+*.sqlite
+*.sql
+Streaming_History*.json
+endsong*.json
+*token_cache*.json
+
+# Local tooling
+.claude/settings.local.json
+.claude/worktrees/
+tasks/
 
 # OS / editor
 .DS_Store
