@@ -13,7 +13,7 @@ compatibility_flags = ["nodejs_compat"]
 # the Worker is reached only through its custom domain.
 workers_dev = false
 preview_urls = false
-routes = [{ pattern = "spotify-sync.example.com", custom_domain = true }]
+routes = [{ pattern = "spotify.example.com", custom_domain = true }]
 
 [assets]
 directory = "./public"
@@ -42,7 +42,7 @@ SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
 TIME_ZONE = "America/Los_Angeles"
 
 # Public origin (custom domain above): reconnect links and email images.
-PUBLIC_URL = "https://spotify-sync.example.com"
+PUBLIC_URL = "https://spotify.example.com"
 # The Spotify account this Worker syncs; the reconnect link refuses any other.
 SPOTIFY_USER_ID = "your-spotify-user"
 
@@ -57,7 +57,7 @@ allowed_sender_addresses = ["spotify-sync@example.com"]
 
 # Secrets (`wrangler secret put <NAME>`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
-# The Spotify app must list https://spotify-sync.example.com/reconnect/callback as a redirect URI.
+# The Spotify app must list https://spotify.example.com/reconnect/callback as a redirect URI.
 
 [observability]
 enabled = true
@@ -87,4 +87,4 @@ SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
 TIME_ZONE = "America/Los_Angeles"
 SPOTIFY_USER_ID = "your-spotify-user"
 # PUBLIC_URL unset: no reconnect links. For a dry-run preview with the vinyl image, pass
-#   --var PUBLIC_URL:https://spotify-sync.example.com
+#   --var PUBLIC_URL:https://spotify.example.com

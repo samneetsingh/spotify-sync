@@ -62,7 +62,7 @@ Failures email `ALERT_EMAIL_TO` through Cloudflare Email Service:
 - **A job throws:** you get an immediate alert, a reminder every 6 hours while it keeps failing, and a note when it recovers.
 - **Syncs stop for more than 45 minutes:** you get a "sync resumed after a gap" email on the first run afterwards. While crons aren't firing at all, nothing can send mail; the gap email arrives once they resume.
 
-An expired Spotify login shows up as a failing sync. Its email has a **Reconnect Spotify** button: it opens Spotify's login and brings you back to the Worker, which saves the new refresh token and syncs right away (you then get the "recovered" email). The link works once, expires after 7 days, and only accepts the account in `SPOTIFY_USER_ID`; reminders reuse it. `npm run token` still works as the fallback. This needs the Spotify app to list `https://spotify-sync.example.com/reconnect/callback` as a redirect URI.
+An expired Spotify login shows up as a failing sync. Its email has a **Reconnect Spotify** button: it opens Spotify's login and brings you back to the Worker, which saves the new refresh token and syncs right away (you then get the "recovered" email). The link works once, expires after 7 days, and only accepts the account in `SPOTIFY_USER_ID`; reminders reuse it. `npm run token` still works as the fallback. This needs the Spotify app to list `https://spotify.example.com/reconnect/callback` as a redirect URI.
 
 ## Emails
 
@@ -70,7 +70,7 @@ All emails (digests and alerts) are built from one small component library in `s
 
 ## Maintenance
 
-**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). It is served on the custom domain (`curl -X POST https://spotify-sync.example.com/sync-full -H "Authorization: Bearer $SECRET"`, needs the `SYNC_FULL_SECRET` secret set), or run it on Cloudflare's edge against production:
+**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). It is served on the custom domain (`curl -X POST https://spotify.example.com/sync-full -H "Authorization: Bearer $SECRET"`, needs the `SYNC_FULL_SECRET` secret set), or run it on Cloudflare's edge against production:
 
 ```bash
 npx wrangler dev --remote          # uses production bindings and .dev.vars
