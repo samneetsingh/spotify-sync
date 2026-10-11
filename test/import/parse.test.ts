@@ -5,7 +5,7 @@ import { ExportCollector, MIN_MS_PLAYED, SPAN_TAIL_MS, isAudioHistoryFile, parse
 // data's StreamingHistory_music_*.json (renamed: .gitignore keeps real export files out of git).
 import accountData from "./fixtures/account-data-format.json";
 import audio from "./fixtures/audio-format.json";
-import endsong from "./fixtures/endsong-format.json";
+import endsong from "./fixtures/older-format.json";
 import { audioRecord } from "./helpers";
 
 const text = (v: unknown) => JSON.stringify(v, null, 2);
