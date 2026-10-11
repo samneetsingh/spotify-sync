@@ -2,9 +2,11 @@
 // Credentials come from .dev.vars; the database is reached through `wrangler d1 execute`,
 // using the generated wrangler config (see wranglerConfig below).
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MIGRATIONS, migrationStatements } from "../src/db/schema";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOKEN_RE = /^[A-Za-z0-9_-]+$/;
@@ -102,6 +104,34 @@ export function lit(v: unknown): string {
   if (typeof v === "number") return String(v);
   if (typeof v === "boolean") return v ? "1" : "0";
   return `'${String(v).replace(/'/g, "''")}'`;
+}
+
+/** The database's schema version; 0 for a brand-new database. */
+export function schemaVersion(db: string): number {
+  const exists = d1Rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").length > 0;
+  return exists ? Number(d1Rows<{ v: number | null }>(db, "SELECT MAX(version) AS v FROM schema_migrations")[0]?.v ?? 0) : 0;
+}
+
+/**
+ * Applies the Worker's pending migrations (src/db/schema.ts, the same statements its migrate()
+ * runs) in one atomic file, so the scripts work on a brand-new database before the first deploy.
+ */
+export function ensureSchema(db: string): void {
+  const latest = MIGRATIONS[MIGRATIONS.length - 1]!.version;
+  const pending = MIGRATIONS.filter((m) => m.version > schemaVersion(db));
+  if (!pending.length) return;
+  const dir = mkdtempSync(join(tmpdir(), "spotify-schema-"));
+  try {
+    const file = join(dir, "schema.sql");
+    writeFileSync(file, pending.flatMap(migrationStatements).map((sql) => `${sql};`).join("\n") + "\n");
+    d1ExecFile(db, file);
+    console.log(`Applied schema v${pending.map((m) => m.version).join(", v")} to ${db}.`);
+  } catch (err) {
+    // A Worker job may have applied the same migrations meanwhile (v9's ALTER TABLEs aren't idempotent).
+    if (schemaVersion(db) < latest) throw err;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export function seedRefreshToken(db: string, token: string): void {

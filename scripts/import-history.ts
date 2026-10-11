@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { EXPORT_PLAY_FIELDS } from "../src/db/schema";
 import { genresJson, trackRows } from "../src/spotify/metadata";
 import type { SpotifyArtistFull, SpotifyTrack } from "../src/spotify/types";
-import { accessTokenFromD1, d1ExecFile, d1Rows, lit, spotifyGet, targetDb } from "./lib";
+import { accessTokenFromD1, d1ExecFile, d1Rows, lit, schemaVersion, spotifyGet, targetDb } from "./lib";
 
 const ROWS_PER_STATEMENT = 200; // keeps each statement well under D1's 100 KB limit
 const ROWS_PER_FILE = 20_000;
@@ -268,8 +268,8 @@ async function main(): Promise<void> {
   const [from, to] = [first, last + SPAN_TAIL_MS];
   console.log(`Span ${new Date(from).toISOString()} .. ${new Date(to).toISOString()}: ${plays.size} plays, ${tracks.size} tracks`);
 
-  const schemaVersion = count(db, "SELECT MAX(version) FROM schema_migrations");
-  if (schemaVersion < 9) throw new Error(`${db} is at schema v${schemaVersion}; deploy the Worker first (its next job applies v9)`);
+  const version = schemaVersion(db);
+  if (version < 9) throw new Error(`${db} is at schema v${version}; run \`npm run token\` first (it applies the schema and stores the login the import needs)`);
   const current = currentPlays(db, from, to);
   const toInsert = [...plays].filter(([k]) => !current.has(k)).map(([, p]) => p);
   const toUpdate = [...plays].filter(([k]) => current.get(k) === false).map(([, p]) => p);

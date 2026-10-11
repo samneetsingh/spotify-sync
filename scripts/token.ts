@@ -1,6 +1,7 @@
 /**
  * Spotify login: runs the OAuth flow in your browser and stores the resulting refresh
  * token in the D1 `state` table, where the Worker reads (and rotates) it. Never prints it.
+ * On a brand-new database it first creates the Worker's schema (same migrations as the Worker).
  *
  * Usage: npm run token [-- --db <database name>] [--no-open]
  * The database defaults to the production one in wrangler.generated.toml (or $WRANGLER_CONFIG).
@@ -11,7 +12,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { SPOTIFY_SCOPE } from "../src/spotify/auth";
-import { requireVars, seedRefreshToken, targetDb, tokenRequest, wranglerConfig } from "./lib";
+import { ensureSchema, requireVars, seedRefreshToken, targetDb, tokenRequest, wranglerConfig } from "./lib";
 
 const TIMEOUT_MS = 5 * 60_000;
 
@@ -22,6 +23,7 @@ if (redirect.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(redirect.h
   throw new Error("SPOTIFY_REDIRECT_URI must be http://127.0.0.1:<port>/<path> for the local login flow");
 }
 console.log(`D1 database "${db}" (config: ${wranglerConfig ?? "wrangler.toml"})`);
+ensureSchema(db);
 
 const state = crypto.randomUUID();
 const authUrl = new URL("https://accounts.spotify.com/authorize");
