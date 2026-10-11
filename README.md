@@ -28,7 +28,7 @@ The Spotify app's redirect URI must be a loopback URL such as `http://127.0.0.1:
 | `npm run dev` | Runs the Worker locally in `dry_run` against the **test** D1; trigger a job with `curl "http://localhost:8787/__scheduled?cron=*/10+*+*+*+*"` |
 | `npm run deploy` | Deploys to production (normally done by Workers Builds on push to `main`) |
 | `npm run token` | Spotify login; writes the refresh token to D1 (`-- --db <name>` for another DB) |
-| `npm run import-history -- <dir>` | Imports a Spotify privacy export (Extended Streaming History JSON), then fetches artist credits and metadata. `--dry-run` only parses. |
+| `npm run import-history -- <dir>` | Reconciles D1 with a Spotify privacy export (Extended Streaming History JSON): inside the export's span, plays become exactly its streams of 30 s or more (missing ones inserted, skips and API duplicates deleted); later plays are untouched. Then fetches artist credits and metadata. Pass the whole export folder; `--dry-run` prints the per-year diff without writing. |
 | `npm run live-write-test` | Creates, fills and deletes a throwaway playlist to check real Spotify writes |
 
 ## Configuration

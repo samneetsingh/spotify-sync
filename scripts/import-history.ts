@@ -1,11 +1,18 @@
 /**
- * Import a Spotify privacy export (Extended Streaming History JSON) into D1, then
+ * Reconcile D1 plays with a Spotify privacy export (Extended Streaming History JSON), then
  * enrich new tracks with artist credits and artist metadata (genres for hindi-favorites,
- * credits for artist playlists). Port of the Python `import-history` + `enrich` commands.
+ * credits for artist playlists).
  *
- * Usage: npm run import-history -- <file-or-dir> [--db spotify-sync] [--dry-run]
- * Safe to re-run: plays and tracks use INSERT OR IGNORE, so existing rows are untouched
- * (unlike Python, history data never overwrites richer API metadata).
+ * Usage: npm run import-history -- <export-dir> [--db spotify-sync] [--dry-run]
+ *
+ * The export is the source of truth for plays inside its span (first record to last record
+ * + 30 s): afterwards D1's plays there equal the export's streams of at least 30 s. Missing
+ * plays are inserted; anything else in the span is deleted (shorter streams, and API plays,
+ * whose timestamps never match the export's exactly). Plays after the span are untouched.
+ * Pass the whole export folder (a single file would only cover its own span) and always
+ * --dry-run first: it reads D1 and prints the per-year diff without writing anything.
+ * Safe to re-run: the diff is recomputed, so an interrupted run converges. Tracks are only
+ * ever inserted (INSERT OR IGNORE), so history data never overwrites richer API metadata.
  *
  * Afterwards, to add newly imported tracks to Liked Songs and the frequent playlist,
  * run the Worker's /sync-full (see README).
@@ -19,13 +26,15 @@ import { DEFAULT_DB, accessTokenFromD1, d1ExecFile, d1Rows, flag, lit, spotifyGe
 
 const ROWS_PER_STATEMENT = 200; // keeps each statement well under D1's 100 KB limit
 const ROWS_PER_FILE = 20_000;
+const MIN_MS_PLAYED = 30_000; // Spotify counts a stream at 30 s; recently-played (the live sync) only reports those
+const SPAN_TAIL_MS = 30_000; // covers the API's twin of the export's last play, which lands ~2 s after its ts
 
 type Rec = Record<string, unknown>;
 interface Play { played_at_ms: number; track_id: string; track_uri: string }
 interface Track { track_id: string; track_uri: string; name: string | null; artists: string | null; album: string | null; explicit: number | null }
 
 /** Port of _parse_record: needs a spotify:track URI and a timestamp; everything else is optional. */
-export function parseRecord(r: Rec): { play: Play; track: Track } | null {
+export function parseRecord(r: Rec): { play: Play; track: Track; msPlayed: number | null } | null {
   const uri = [r.spotify_track_uri, r.track_uri, r.trackUri].find((u) => typeof u === "string" && u) as string | undefined;
   if (!uri?.startsWith("spotify:track:")) return null;
   const trackId = uri.split(":").pop()!;
@@ -46,6 +55,7 @@ export function parseRecord(r: Rec): { play: Play; track: Track } | null {
       album: str(r.master_metadata_album_album_name),
       explicit,
     },
+    msPlayed: ([r.ms_played, r.msPlayed].find((v) => typeof v === "number") as number | undefined) ?? null,
   };
 }
 
@@ -83,6 +93,16 @@ function insertStatements(table: string, cols: string[], rows: unknown[][]): str
   return out;
 }
 
+/** Deletes plays by primary key; the row-value IN is a primary-key lookup, not a scan. */
+function deleteStatements(keys: Array<[number, string]>): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < keys.length; i += ROWS_PER_STATEMENT) {
+    const values = keys.slice(i, i + ROWS_PER_STATEMENT).map(([ms, id]) => `(${ms}, ${lit(id)})`).join(",\n");
+    out.push(`DELETE FROM plays WHERE (played_at_ms, track_id) IN (VALUES\n${values});`);
+  }
+  return out;
+}
+
 function writeChunks(dir: string, prefix: string, statements: string[], rowsPerStatement: number): string[] {
   const perFile = Math.max(1, Math.floor(ROWS_PER_FILE / rowsPerStatement));
   const files: string[] = [];
@@ -95,6 +115,54 @@ function writeChunks(dir: string, prefix: string, statements: string[], rowsPerS
 }
 
 const count = (db: string, sql: string) => Number(Object.values(d1Rows(db, sql)[0] ?? {})[0] ?? 0);
+const playKey = (ms: number, trackId: string) => `${ms}:${trackId}`;
+const year = (ms: number) => new Date(ms).getUTCFullYear();
+
+/** Play keys in D1 with from <= played_at_ms < to, one query per calendar year to keep responses small. */
+function currentPlayKeys(db: string, from: number, to: number): Set<string> {
+  const keys = new Set<string>();
+  for (let y = year(from); y <= year(to); y++) {
+    const [lo, hi] = [Math.max(from, Date.UTC(y, 0, 1)), Math.min(to, Date.UTC(y + 1, 0, 1))];
+    const rows = d1Rows<{ played_at_ms: number; track_id: string }>(
+      db,
+      `SELECT played_at_ms, track_id FROM plays WHERE played_at_ms >= ${lo} AND played_at_ms < ${hi}`,
+    );
+    for (const r of rows) keys.add(playKey(r.played_at_ms, r.track_id));
+  }
+  return keys;
+}
+
+function applyDiff(db: string, tracks: Map<string, Track>, toInsert: Play[], toDelete: Array<[number, string]>): void {
+  const before = { plays: count(db, "SELECT COUNT(*) FROM plays"), tracks: count(db, "SELECT COUNT(*) FROM tracks") };
+  const tmp = mkdtempSync(join(tmpdir(), "spotify-import-"));
+  try {
+    const insertTrackIds = new Set(toInsert.map((p) => p.track_id));
+    const trackStmts = insertStatements(
+      "tracks",
+      ["track_id", "track_uri", "name", "artists", "album", "explicit"],
+      [...tracks.values()].filter((t) => insertTrackIds.has(t.track_id)).map((t) => [t.track_id, t.track_uri, t.name, t.artists, t.album, t.explicit]),
+    );
+    const playStmts = insertStatements(
+      "plays",
+      ["played_at_ms", "track_id", "track_uri", "source"],
+      toInsert.map((p) => [p.played_at_ms, p.track_id, p.track_uri, "history_import"]),
+    );
+    // Tracks first (plays reference them), and inserts before deletes so an interrupted run never loses plays.
+    const chunks = [
+      ...writeChunks(tmp, "1-tracks", trackStmts, ROWS_PER_STATEMENT),
+      ...writeChunks(tmp, "2-plays", playStmts, ROWS_PER_STATEMENT),
+      ...writeChunks(tmp, "3-deletes", deleteStatements(toDelete), ROWS_PER_STATEMENT),
+    ];
+    chunks.forEach((f, i) => {
+      d1ExecFile(db, f);
+      console.log(`  applied chunk ${i + 1}/${chunks.length}`);
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  const after = { plays: count(db, "SELECT COUNT(*) FROM plays"), tracks: count(db, "SELECT COUNT(*) FROM tracks") };
+  console.log(`Plays: ${before.plays} -> ${after.plays}, new tracks: ${after.tracks - before.tracks}`);
+}
 
 async function enrich(db: string): Promise<void> {
   const token = await accessTokenFromD1(db);
@@ -136,7 +204,7 @@ async function enrich(db: string): Promise<void> {
 
 async function main(): Promise<void> {
   const target = process.argv.slice(2).find((a, i, all) => !a.startsWith("--") && all[i - 1] !== "--db");
-  if (!target) throw new Error("Usage: npm run import-history -- <file-or-dir> [--db name] [--dry-run]");
+  if (!target) throw new Error("Usage: npm run import-history -- <export-dir> [--db name] [--dry-run]");
   const db = flag("db", DEFAULT_DB);
   const dryRun = process.argv.includes("--dry-run");
 
@@ -147,8 +215,8 @@ async function main(): Promise<void> {
 
   const plays = new Map<string, Play>();
   const tracks = new Map<string, Track>();
-  let seen = 0;
-  let skipped = 0;
+  let [seen, skipped, short] = [0, 0, 0];
+  let [first, last] = [Infinity, -Infinity];
   for (const f of files) {
     const records = loadRecords(f);
     seen += records.length;
@@ -158,43 +226,42 @@ async function main(): Promise<void> {
         skipped++;
         continue;
       }
-      plays.set(`${parsed.play.played_at_ms}:${parsed.play.track_id}`, parsed.play);
-      if (!tracks.has(parsed.track.track_id)) tracks.set(parsed.track.track_id, parsed.track);
+      const { play, track, msPlayed } = parsed;
+      // The span covers every track record, so shorter streams inside it get deleted too.
+      [first, last] = [Math.min(first, play.played_at_ms), Math.max(last, play.played_at_ms)];
+      if ((msPlayed ?? 0) < MIN_MS_PLAYED) {
+        short++;
+        continue;
+      }
+      plays.set(playKey(play.played_at_ms, play.track_id), play);
+      if (!tracks.has(track.track_id)) tracks.set(track.track_id, track);
     }
   }
-  let [first, last] = [Infinity, -Infinity];
-  for (const p of plays.values()) [first, last] = [Math.min(first, p.played_at_ms), Math.max(last, p.played_at_ms)];
-  console.log(`${files.length} files, ${seen} records, ${skipped} skipped (no track URI or timestamp)`);
-  if (!plays.size) return;
-  console.log(`${plays.size} unique plays, ${tracks.size} unique tracks, ${new Date(first).toISOString()} .. ${new Date(last).toISOString()}`);
+  console.log(`${files.length} files, ${seen} records, ${skipped} skipped (no track URI or timestamp), ${short} under ${MIN_MS_PLAYED / 1000} s`);
+  if (first > last) return;
+  const [from, to] = [first, last + SPAN_TAIL_MS];
+  console.log(`Span ${new Date(from).toISOString()} .. ${new Date(to).toISOString()}: ${plays.size} plays, ${tracks.size} tracks`);
+
+  const current = currentPlayKeys(db, from, to);
+  const toInsert = [...plays].filter(([k]) => !current.has(k)).map(([, p]) => p);
+  const toDelete = [...current].filter((k) => !plays.has(k)).map((k): [number, string] => {
+    const [ms, trackId] = k.split(":");
+    return [Number(ms), trackId!];
+  });
+  const byYear = new Map<number, [number, number]>();
+  const tally = (ms: number, i: 0 | 1) => {
+    const counts = byYear.get(year(ms)) ?? [0, 0];
+    counts[i]++;
+    byYear.set(year(ms), counts);
+  };
+  for (const p of toInsert) tally(p.played_at_ms, 0);
+  for (const [ms] of toDelete) tally(ms, 1);
+  console.log(`D1 has ${current.size} plays in the span; diff +${toInsert.length} / -${toDelete.length}`);
+  for (const [y, [ins, del]] of [...byYear].sort(([a], [b]) => a - b)) console.log(`  ${y}: +${ins} / -${del}`);
   if (dryRun) return;
 
-  const before = { plays: count(db, "SELECT COUNT(*) FROM plays"), tracks: count(db, "SELECT COUNT(*) FROM tracks") };
-  const tmp = mkdtempSync(join(tmpdir(), "spotify-import-"));
-  try {
-    const trackStmts = insertStatements(
-      "tracks",
-      ["track_id", "track_uri", "name", "artists", "album", "explicit"],
-      [...tracks.values()].map((t) => [t.track_id, t.track_uri, t.name, t.artists, t.album, t.explicit]),
-    );
-    const playStmts = insertStatements(
-      "plays",
-      ["played_at_ms", "track_id", "track_uri", "source"],
-      [...plays.values()].map((p) => [p.played_at_ms, p.track_id, p.track_uri, "history_import"]),
-    );
-    // Tracks first: plays reference them (foreign key).
-    const chunks = [...writeChunks(tmp, "1-tracks", trackStmts, ROWS_PER_STATEMENT), ...writeChunks(tmp, "2-plays", playStmts, ROWS_PER_STATEMENT)];
-    chunks.forEach((f, i) => {
-      d1ExecFile(db, f);
-      console.log(`  imported chunk ${i + 1}/${chunks.length}`);
-    });
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-  const after = { plays: count(db, "SELECT COUNT(*) FROM plays"), tracks: count(db, "SELECT COUNT(*) FROM tracks") };
-  console.log(`New plays: ${after.plays - before.plays}, new tracks: ${after.tracks - before.tracks}`);
-
-  await enrich(db);
+  if (toInsert.length || toDelete.length) applyDiff(db, tracks, toInsert, toDelete);
+  await enrich(db); // also on an empty diff, so a re-run finishes an enrichment that failed
   console.log("Done. Next: run /sync-full to add new tracks to Liked Songs and the frequent playlist (see README).");
 }
 
