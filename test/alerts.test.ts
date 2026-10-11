@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { REMIND_AFTER_MS, checkSyncGap, localTime, recordFailure, recordSuccess, remedy, type AlertConfig } from "../src/alerts";
+import { LAST_ERROR_CHARS, REMIND_AFTER_MS, checkSyncGap, isLoginError, localTime, recordFailure, recordSuccess, remedy, type AlertConfig, type FailingState } from "../src/alerts";
 import { getState } from "../src/db/state";
 import { migrate } from "../src/db/schema";
 import worker from "../src/index";
@@ -32,7 +32,8 @@ describe("failure alerts", () => {
     await recordFailure(env.DB, cfg, "sync", new Error("again"), t0 + 10 * 60_000);
     expect(sent.map((s) => s.subject)).toEqual(["[spotify-sync] sync failed"]);
     expect(sent[0]!.to).toBe("me@example.com");
-    expect(sent[0]!.text).toContain("npm run token");
+    expect(sent[0]!.text).toContain("log in with Spotify on your dashboard");
+    expect(sent[0]!.text).not.toContain("npm run token");
 
     await recordFailure(env.DB, cfg, "sync", new Error("still"), t0 + REMIND_AFTER_MS + 1);
     expect(sent.at(-1)!.subject).toBe("[spotify-sync] sync still failing (3 failures)");
@@ -65,60 +66,67 @@ describe("failure alerts", () => {
     await expect(recordSuccess(env.DB, {}, "sync")).resolves.toBeUndefined();
   });
 
-  it("gives a fix for an expired login", () => {
-    expect(remedy("Token refresh failed: 400 invalid_grant")).toContain("npm run token");
-    expect(remedy("something else")).toContain("Logs");
+  it("gives owner-facing fixes (no terminal commands)", () => {
+    expect(remedy("Token refresh failed: 400 invalid_grant")).toBe(
+      "The Spotify login has expired or been revoked. Fix: log in with Spotify on your dashboard; syncing resumes right after.",
+    );
+    expect(remedy("Spotify API GET → 429")).toContain("rate limiting");
+    expect(remedy("something else")).toContain("clears on its own");
+    for (const m of ["invalid_grant", "x", "429"]) expect(remedy(m)).not.toMatch(/npm|Workers & Pages/);
+  });
+
+  it("classifies login errors (the dashboard shows Reconnect Spotify for them)", () => {
+    expect(isLoginError('Token refresh failed: 400 {"error":"invalid_grant"}')).toBe(true);
+    expect(isLoginError("No refresh token in state")).toBe(true);
+    expect(isLoginError("Spotify API GET → 500")).toBe(false);
+  });
+
+  it("keeps the latest error (first 500 characters) in the failing state for the dashboard", async () => {
+    const { cfg } = fakeEmail();
+    await recordFailure(env.DB, cfg, "sync", new Error("first"), 1);
+    await recordFailure(env.DB, cfg, "sync", new Error("x".repeat(800)), 2);
+    const state = JSON.parse((await getState(env.DB, "alert_failing:sync"))!) as FailingState;
+    expect(state).toEqual({ since: 1, lastSent: 1, failures: 2, lastError: "x".repeat(LAST_ERROR_CHARS) });
   });
 });
 
-describe("reconnect link in login alerts", () => {
-  const withUrl = (cfg: AlertConfig): AlertConfig => ({ ...cfg, publicUrl: "https://sync.test", timeZone: "America/Los_Angeles" });
+describe("reconnect button in login alerts", () => {
+  const withUrl = (cfg: AlertConfig, publicUrl = "https://sync.test"): AlertConfig => ({ ...cfg, publicUrl, timeZone: "America/Los_Angeles" });
   const loginError = new Error('Token refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token revoked"}');
-  const linkIn = (html: string) => html.match(/https:\/\/sync\.test\/reconnect\?k=([0-9a-f]{64})/)?.[1];
 
-  it("adds a one-click reconnect button and keeps the terminal fallback", async () => {
+  it("links to the dashboard's login, which only accepts the owner's account", async () => {
     const { sent, cfg } = fakeEmail();
     await recordFailure(env.DB, withUrl(cfg), "sync", loginError, Date.UTC(2026, 9, 11, 10, 20));
     const { html, text, subject } = sent[0]!;
     expect(subject).toBe("[spotify-sync] sync failed");
     expect(html).toContain("Spotify disconnected");
-    expect(html).toContain("Reconnect Spotify");
-    expect(linkIn(html!)).toBeDefined();
-    expect(text).toContain(`Reconnect Spotify: https://sync.test/reconnect?k=${linkIn(html!)}`);
-    expect(text).toContain("npm run token");
+    expect(html).toContain('href="https://sync.test/login"');
+    expect(text).toContain("Reconnect Spotify: https://sync.test/login\nOpens Spotify's login; only your account is accepted. Syncing resumes right after.");
     expect(text).toContain("Failing since: Sun, Oct 11, 3:20 AM PDT");
     expect(html).toContain("&quot;invalid_grant&quot;"); // the error is escaped
+    expect(`${html}${text}`).not.toMatch(/npm run token|\/reconnect/);
   });
 
-  it("reuses the link in reminders, replaces it near expiry, and drops it on recovery", async () => {
+  it("uses the same link in reminders and stores no nonce", async () => {
     const { sent, cfg } = fakeEmail();
     const t0 = Date.UTC(2026, 9, 11, 12);
-    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0);
+    await recordFailure(env.DB, withUrl(cfg, "https://sync.test/"), "sync", loginError, t0);
     await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0 + REMIND_AFTER_MS);
-    expect(linkIn(sent[1]!.html!)).toBe(linkIn(sent[0]!.html!));
-    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0 + 6.5 * 86_400_000);
-    expect(linkIn(sent[2]!.html!)).not.toBe(linkIn(sent[0]!.html!));
+    expect(sent.map((s) => s.text!.match(/Reconnect Spotify: (\S+)/)?.[1])).toEqual(["https://sync.test/login", "https://sync.test/login"]);
+    expect(await getState(env.DB, "reconnect")).toBeNull();
 
     await recordSuccess(env.DB, withUrl(cfg), "sync", t0 + 7 * 86_400_000);
     expect(sent.at(-1)!.subject).toBe("[spotify-sync] sync recovered");
-    expect(await getState(env.DB, "reconnect")).toBeNull();
+    expect(await getState(env.DB, "alert_failing:sync")).toBeNull();
   });
 
-  it("keeps the link when a job other than sync recovers", async () => {
-    const { sent, cfg } = fakeEmail();
-    await recordFailure(env.DB, withUrl(cfg), "sync", loginError);
-    await recordFailure(env.DB, withUrl(cfg), "holiday-playlist", loginError);
-    await recordSuccess(env.DB, withUrl(cfg), "holiday-playlist"); // e.g. out of season, no Spotify call
-    expect(await getState(env.DB, "reconnect")).not.toBeNull();
-    expect(linkIn(sent[1]!.html!)).toBe(linkIn(sent[0]!.html!));
-  });
-
-  it("has no link for other errors or without a public URL", async () => {
+  it("has no button for other errors or without a public URL", async () => {
     const { sent, cfg } = fakeEmail();
     await recordFailure(env.DB, withUrl(cfg), "sync", new Error("Spotify API GET → 500"));
     await recordFailure(env.DB, cfg, "artist-playlists", loginError);
-    expect(sent.map((s) => s.html!.includes("/reconnect?k="))).toEqual([false, false]);
-    expect(sent[1]!.text).toContain("npm run token");
+    expect(sent.map((s) => s.html!.includes("Reconnect Spotify"))).toEqual([false, false]);
+    expect(sent[1]!.text).toContain("log in with Spotify on your dashboard");
+    expect(sent[1]!.text).not.toContain("npm run token");
   });
 
   it("formats times in the alert time zone", () => {
@@ -165,7 +173,7 @@ describe("scheduled handler", () => {
     } as Env;
     await expect(worker.scheduled({ cron: "*/10 * * * *" } as ScheduledEvent, testEnv, {} as ExecutionContext)).rejects.toThrow(/invalid_grant/);
     expect(sent.map((s) => s.subject)).toEqual(["[spotify-sync] sync failed"]);
-    expect(sent[0]!.text).toContain("npm run token");
+    expect(sent[0]!.text).toContain("Spotify login expired or was revoked");
   });
 
   it("runs every daily job even when one fails, then fails the invocation", async () => {

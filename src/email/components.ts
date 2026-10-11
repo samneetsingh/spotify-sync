@@ -222,12 +222,15 @@ export function split(left: { label: string; value: number }, right: { label: st
 
 // ---------------------------------------------------------------------------- alerts
 
-export type Status = "failing" | "recovered" | "notice";
+/** Alert statuses, plus `setup` and `connected` for the account emails (src/emails/account.ts). */
+export type Status = "failing" | "recovered" | "notice" | "setup" | "connected";
 
 const STATUS: Record<Status, { label: string; color: string; bg: string }> = {
   failing: { label: "Failing", color: C.red, bg: "#3a1418" },
   recovered: { label: "Recovered", color: C.green, bg: "#10301d" },
   notice: { label: "Heads up", color: C.amber, bg: "#3a2a0c" },
+  setup: { label: "Almost ready", color: C.amber, bg: "#3a2a0c" },
+  connected: { label: "Connected", color: C.green, bg: "#10301d" },
 };
 
 /** Status pill, title and lead paragraph at the top of an alert. */
