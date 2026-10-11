@@ -31,6 +31,8 @@ const SESSION_GAP_MS = 30 * 60_000;
 const LATE_NIGHT_END_HOUR = 4;
 const LATE_NIGHT_MIN_SHARE = 0.08;
 const MAX_HIGHLIGHTS = 8;
+/** What a genre shift's percentages are of (many artists have no genres on Spotify). */
+const GENRE_SHARE_OF = "plays with genre tags (plays whose main artist has genres on Spotify), not all plays";
 
 /** Inclusion thresholds per digest kind. */
 const MIN = {
@@ -273,10 +275,10 @@ function build(kind: DigestKind, period: Period, s: PlayStats, x: HighlightExtra
       const beforePct = share(best.before, g.tagged.before);
       const previousLabel = kind === "month" ? monthLabel(addMonths(period.start, -1)) : "last week";
       add("genreShift", best.points / 20, {
-        stat: { value: nowPct, unit: `percent ${best.genre}` },
-        facts: { genre: best.genre, nowPct, beforePct, deltaPts: nowPct - beforePct, previousLabel },
+        stat: { value: nowPct, unit: `of your plays with genre tags were ${best.genre}`, percent: true },
+        facts: { genre: best.genre, nowPct, beforePct, deltaPts: nowPct - beforePct, previousLabel, shareOf: GENRE_SHARE_OF },
         defaultHeading: `More ${best.genre}`,
-        defaultInsight: `**${best.genre}** made up ${nowPct}% of your plays, up from ${beforePct}% ${kind === "month" ? `in ${previousLabel}` : previousLabel}.`,
+        defaultInsight: `**${best.genre}** made up ${nowPct}% of your plays with genre tags, up from ${beforePct}% ${kind === "month" ? `in ${previousLabel}` : previousLabel}.`,
       });
     }
   }

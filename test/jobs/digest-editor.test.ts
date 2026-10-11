@@ -5,6 +5,7 @@ import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getState } from "../../src/db/state";
 import { migrate } from "../../src/db/schema";
+import { loadHighlights } from "../../src/editor/highlights";
 import { buildEditorInput } from "../../src/editor/input";
 import type { EditorConfig, LayoutPlan } from "../../src/editor/types";
 import { lastPeriod, loadDigest, runMonthlyRecap, runWeeklyDigest } from "../../src/jobs/digest";
@@ -28,17 +29,21 @@ function month(prefix: "2026-09" | "2026-10", comebackName = "Comeback") {
   ];
 }
 
-/** This Week 4 times on Friday Oct 2 (a one-song day and a new obsession), one other song, a week before. */
+/**
+ * Sep 28 - Oct 4: This Week (the song of the week, also its new obsession) once a day except Friday,
+ * Friday Song 4 times on Friday (a one-song day), so music every day; one play the week before.
+ */
 const WEEK = [
-  { id: "w", name: "This Week", artist: ["W1", "Weekly"] as [string, string], at: ["18:00", "18:10", "18:20", "18:30"].map((t) => `2026-10-02T${t}:00Z`) },
-  { id: "x", name: "Other Song", artist: ["X1", "Other"] as [string, string], at: ["2026-09-29T18:00:00Z"] },
+  { id: "w", name: "This Week", artist: ["W1", "Weekly"] as [string, string], at: ["09-28", "09-29", "09-30", "10-01", "10-03", "10-04"].map((d) => `2026-${d}T18:00:00Z`) },
+  { id: "z", name: "Friday Song", artist: ["Z1", "Zed"] as [string, string], at: ["18:00", "18:10", "18:20", "18:30"].map((t) => `2026-10-02T${t}:00Z`) },
   { id: "p", name: "Last Week", artist: ["P1", "Prior"] as [string, string], at: ["2026-09-22T18:00:00Z"] },
 ];
 
+/** Every chart with data (sound, year and throwback have none), reordered, plus one highlight. */
 const MONTH_PLAN: LayoutPlan = {
   theme: "default",
   headline: "An old favorite returns",
-  lead: "28 plays, and Comeback by Returner back on repeat.",
+  lead: "28 plays, and “Comeback” by Returner back on repeat.",
   preheader: "A comeback, plus the songs that ran your month",
   sections: [
     { id: "hl:comebackTrack", heading: "Back after a break", insight: null },
@@ -46,19 +51,25 @@ const MONTH_PLAN: LayoutPlan = {
     { id: "alsoOnRepeat", heading: "Close behind", insight: null },
     { id: "topArtists", heading: "Top artists", insight: null },
     { id: "welcomeBack", heading: "Welcome back", insight: "**Returner** is back in your rotation." },
+    { id: "newToYou", heading: "New to you", insight: null },
+    { id: "dayByDay", heading: "Day by day", insight: null },
+    { id: "whenYouListen", heading: "When you listen", insight: null },
   ],
 };
 
 const WEEK_PLAN: LayoutPlan = {
   theme: "default",
   headline: "Friday on repeat",
-  lead: "This Week by Weekly took over your Friday.",
+  lead: "“This Week” led the week, but Friday belonged to “Friday Song”.",
   preheader: "One song, all day Friday",
   sections: [
     { id: "song", heading: "Song of the week", insight: null },
-    { id: "hl:repeatDay", heading: "Friday, on a loop", insight: "You played **This Week** 4 times on Friday, October 2." },
+    { id: "hl:repeatDay", heading: "Friday, on a loop", insight: "You played **“Friday Song”** 4 times on Friday, October 2." },
     { id: "alsoOnRepeat", heading: "Also on repeat", insight: null },
     { id: "topArtists", heading: "Top artists", insight: null },
+    { id: "week", heading: "Your week", insight: null },
+    { id: "timeOfDay", heading: "Time of day", insight: null },
+    { id: "newToYou", heading: "New to you", insight: null },
   ],
 };
 
@@ -117,6 +128,7 @@ describe("buildEditorInput", () => {
     expect(input.highlights[0]!.subject).toMatchObject({ type: "track", id: "r", name: "Comeback" });
     expect(input.specs.map((s) => s.id)).toEqual(["song", "alsoOnRepeat", "topArtists", "sound", "dayByDay", "whenYouListen", "year", "newToYou", "welcomeBack", "throwback"]);
     expect(input.specs.filter((s) => !s.available).map((s) => s.id)).toEqual(["sound", "year", "throwback"]);
+    expect(input.specs.every((s) => s.required === s.available)).toBe(true); // every chart with data stays
     expect(input.themes.map((t) => t.id)).toEqual(["default"]);
     expect(input.defaultTheme).toBe("default");
     expect(input.defaults).toEqual({
@@ -124,6 +136,16 @@ describe("buildEditorInput", () => {
       lead: "28 plays. Filler 1 on repeat, Artist 1 all month.",
       preheader: "28 plays and 0 hours. Song of the month: Filler 1 by Artist 1.",
     });
+  });
+
+  it("drops highlights about the song of the period (it has its own section)", async () => {
+    await seed(WEEK);
+    const data = (await loadDigest(env.DB, artSource().sp, lastPeriod("week", OCT_7, TZ), TZ))!;
+    expect(data.topTracks[0]!.track_id).toBe("w");
+    const all = await loadHighlights(env.DB, "week", data.period, TZ, data);
+    expect(all.map((h) => [h.kind, h.subject?.id])).toEqual([["streak", undefined], ["newObsession", "w"], ["repeatDay", "z"]]);
+    const input = await buildEditorInput(env.DB, data, TZ);
+    expect(input.highlights.map((h) => h.kind)).toEqual(["streak", "repeatDay"]);
   });
 
   it("offers the seasonal theme", async () => {
@@ -150,7 +172,7 @@ describe("with a valid plan", () => {
     const html = email!.html!;
     expect(html).toContain("An old favorite returns<br><span");
     expect(html).toContain(">September 2026</span>"); // the period label under the headline
-    expect(html).toContain("28 plays, and Comeback by Returner back on repeat.");
+    expect(html).toContain("28 plays, and “Comeback” by Returner back on repeat.");
     expect(html).toContain("A comeback, plus the songs that ran your month"); // preheader
     expect(html).not.toContain("Song of the month: Filler 1 by Artist 1."); // the default preheader
     // The highlight card, with the comeback's cover fetched after planning (it isn't a top-5 song).
@@ -159,13 +181,14 @@ describe("with a valid plan", () => {
     expect(html).toContain("https://i.test/r-300");
     expect(artCalls).toHaveLength(3);
     expect(artCalls.at(-1)).toBe("tracks:r");
-    expect(html.indexOf("Back after a break")).toBeLessThan(html.indexOf("Song of the month"));
 
     const text = email!.text;
-    expect(text).toContain("Your month in music: September 2026\nAn old favorite returns\n28 plays, and Comeback by Returner back on repeat.");
+    const order = MONTH_PLAN.sections.map((s) => text.indexOf(`\n${s.heading}`));
+    expect(order.every((at) => at > 0)).toBe(true); // every chart, in the plan's order
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(text).toContain("Your month in music: September 2026\nAn old favorite returns\n28 plays, and “Comeback” by Returner back on repeat.");
     expect(text).toContain("Back after a break\n  2 years away\n  Comeback is back: 3 plays this month, your first since May 2024.\n  Comeback — Returner");
     expect(text).toContain("Welcome back\n  Returner is back in your rotation.");
-    for (const left of ["Day by day", "When you listen", "New to you"]) expect(text).not.toContain(left);
     expect(editorLines()).toEqual([expect.objectContaining({ job: "monthly-recap", editor: "used", model: "gpt-6.1-sol", theme: "default" })]);
   });
 
@@ -176,12 +199,14 @@ describe("with a valid plan", () => {
     const { sent, artCalls } = await send("week", ai.cfg);
     const [email] = sent;
     expect(email!.subject).toBe(expected.subject);
-    expect(email!.text).toContain("Your week in music: Sep 28 to Oct 4\nFriday on repeat\nThis Week by Weekly took over your Friday.");
-    expect(email!.text).toContain("Friday, on a loop\n  4 plays in one day\n  You played This Week 4 times on Friday, October 2.\n  This Week — Weekly");
+    expect(email!.text).toContain("Your week in music: Sep 28 to Oct 4\nFriday on repeat\n“This Week” led the week, but Friday belonged to “Friday Song”.");
+    expect(email!.text).toContain("Friday, on a loop\n  4 plays in one day\n  You played “Friday Song” 4 times on Friday, October 2.\n  Friday Song — Zed");
     expect(email!.html).toContain("One song, all day Friday");
-    expect(email!.html).toContain("https://i.test/w-300");
+    expect(email!.html).toContain("https://i.test/z-300");
     expect(artCalls).toHaveLength(2);
-    expect(email!.text).not.toContain("Time of day");
+    const order = WEEK_PLAN.sections.map((s) => email!.text.indexOf(`\n${s.heading}`));
+    expect(order.every((at) => at > 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 });
 
@@ -191,6 +216,8 @@ describe("falls back to exactly the default email", () => {
     ["month", "an API error", () => json({ error: { message: "boom", type: "server_error" } }, 500), "api 500"],
     ["month", "a plan that fails validation", answer({ ...MONTH_PLAN, lead: "1,600 plays and counting." }), "number: lead 1,600"],
     ["month", "a theme not offered this month", answer({ ...MONTH_PLAN, theme: "halloween" }), "theme not allowed: halloween"],
+    ["month", "a plan that drops a chart", answer({ ...MONTH_PLAN, sections: MONTH_PLAN.sections.filter((x) => x.id !== "whenYouListen") }), "missing required section: whenYouListen"],
+    ["week", "a highlight about the song of the week", answer({ ...WEEK_PLAN, sections: [...WEEK_PLAN.sections, { id: "hl:newObsession", heading: "New", insight: null }] }), "unavailable section: hl:newObsession"],
     ["week", "text that isn't JSON", () => json(responseBody("{")), "not json"],
     ["week", "an API error", () => json({ error: { message: "bad key", type: "invalid_request_error", code: "invalid_api_key" } }, 401), "api 401"],
   ])("%s: %s", async (kind, _name, respond, reason) => {

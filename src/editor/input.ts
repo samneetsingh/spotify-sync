@@ -1,5 +1,6 @@
 // The editor's input for a loaded digest: the facts, the highlights (the only extra queries), the
 // section catalog, the themes this period allows and the copy the email uses without the editor.
+// A highlight about the song of the period is dropped: that song already has its own section.
 
 import { digestCopy, sectionSpecs } from "../email/sections";
 import { seasonalTheme, themeOptions } from "../email/themes";
@@ -13,10 +14,12 @@ export async function buildEditorInput(db: D1Database, data: DigestData, timeZon
   const { kind } = data.period;
   const lastDay = addDays(data.period.end, -1);
   const copy = digestCopy(data);
+  const song = data.topTracks[0]?.track_id;
+  const highlights = await loadHighlights(db, kind, data.period, timeZone, data);
   return {
     kind,
     facts: buildFacts(data),
-    highlights: await loadHighlights(db, kind, data.period, timeZone, data),
+    highlights: highlights.filter((h) => !(h.subject?.type === "track" && h.subject.id === song)),
     specs: sectionSpecs(kind, data),
     themes: themeOptions(lastDay),
     defaultTheme: seasonalTheme(lastDay),

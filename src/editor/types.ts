@@ -58,8 +58,8 @@ export interface Highlight {
   kind: HighlightKind;
   /** 0..1, code's ranking; never sent to the model, never citable. */
   score: number;
-  /** The card's big number, e.g. { value: 23, unit: "days in a row" }. */
-  stat: { value: number; unit: string };
+  /** The card's big number, e.g. { value: 23, unit: "days in a row" }; `percent` shows it as "9%". */
+  stat: { value: number; unit: string; percent?: boolean };
   subject?: { type: "track" | "artist"; id: string; name: string; artists?: string };
   /** Everything copy may cite, pre-formatted labels included. */
   facts: Record<string, string | number>;

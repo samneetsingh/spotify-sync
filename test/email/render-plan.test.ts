@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { THEME_IDS } from "../../src/editor/types";
+import { LIMITS } from "../../src/editor/prompt";
+import { THEME_IDS, type Highlight } from "../../src/editor/types";
 import { renderDigest, type DigestData } from "../../src/jobs/digest";
 import { bold, unbold } from "../../src/email/layout";
 import { defaultCopy, defaultLayout, sectionSpecs } from "../../src/email/sections";
@@ -58,7 +59,7 @@ describe("the section catalog", () => {
     const month = sectionSpecs("month", monthData());
     expect(month.map((s) => s.id)).toEqual(["song", "alsoOnRepeat", "topArtists", "sound", "dayByDay", "whenYouListen", "year", "newToYou", "welcomeBack", "throwback"]);
     expect(month.every((s) => s.available)).toBe(true);
-    expect(month.filter((s) => s.required).map((s) => s.id)).toEqual(["song", "alsoOnRepeat", "topArtists"]);
+    expect(month.every((s) => s.required)).toBe(true); // every section with data is required: the editor never drops a chart
     expect(month.filter((s) => !s.insightSlot).map((s) => s.id)).toEqual(["song", "alsoOnRepeat", "topArtists"]);
     expect(month[0]).toMatchObject({ component: "feature", defaultHeading: "Song of the month", defaultInsight: null });
     expect(month.find((s) => s.id === "dayByDay")!.defaultInsight).toBe("Your biggest day was **Sunday, September 13**, with 100 plays.");
@@ -68,13 +69,19 @@ describe("the section catalog", () => {
     expect(week.map((s) => s.id)).toEqual(["song", "alsoOnRepeat", "topArtists", "week", "timeOfDay", "newToYou"]);
     expect(week.map((s) => s.defaultHeading)).toEqual(["Song of the week", "Also on repeat", "Top artists", "Your week", "Time of day", "New to you"]);
     expect(defaultCopy("week", weekData())).toEqual({ heading: "Your week", insight: "**Friday** was your biggest day, with 47 plays." });
+
+    // The editor's section cap fits every section plus the most highlights.
+    expect(LIMITS.maxSections.month).toBe(month.length + LIMITS.maxHighlights.month);
+    expect(LIMITS.maxSections.week).toBe(week.length + LIMITS.maxHighlights.week);
   });
 
   it("marks sections without data unavailable", () => {
     const data = { ...monthData(), topTracks: monthData().topTracks.slice(0, 1), genres: [], returning: [], throwbacks: [], newTrackCount: 0, newArtists: [] };
     data.year = data.year.map((m, i) => ({ ...m, plays: i === 11 ? m.plays : 0 }));
-    const off = sectionSpecs("month", data).filter((s) => !s.available);
+    const specs = sectionSpecs("month", data);
+    const off = specs.filter((s) => !s.available);
     expect(off.map((s) => s.id)).toEqual(["alsoOnRepeat", "sound", "year", "newToYou", "welcomeBack", "throwback"]);
+    expect(specs.filter((s) => s.required).map((s) => s.id)).toEqual(["song", "topArtists", "dayByDay", "whenYouListen"]);
     expect(off.find((s) => s.id === "year")!.defaultInsight).toBeNull();
     expect(defaultLayout("month", data).map((s) => s.id)).toEqual(["song", "topArtists", "dayByDay", "whenYouListen"]);
   });
@@ -113,6 +120,26 @@ describe("rendering a plan", () => {
     expect(obsession).toContain("&#9834;");
     expect(obsession).toContain("Brand New &lt;3");
     expect(obsession).toContain("Fresh &amp; Co");
+  });
+
+  it("shows a percent stat as 9% and keeps curly quotes", () => {
+    const genre: Highlight = {
+      id: "hl:genreShift",
+      kind: "genreShift",
+      score: 0.5,
+      stat: { value: 9, unit: "of your plays with genre tags were shoegaze", percent: true },
+      facts: { genre: "shoegaze", nowPct: 9, beforePct: 1, deltaPts: 8, previousLabel: "last week" },
+      defaultHeading: "More shoegaze",
+      defaultInsight: "**shoegaze** made up 9% of your plays with genre tags, up from 1% last week.",
+    };
+    const plan = { ...monthPlan(), headline: "“Tom & Jerry” all month", sections: [...monthPlan().sections, { id: "hl:genreShift" as const, heading: "More shoegaze", insight: "**“Midnight City”** didn’t hurt", highlight: genre }] };
+    const out = renderDigest(data, { plan, theme: "default" });
+    const card = block(out.html!, "More shoegaze");
+    expect(card).toContain('color:#1ed760">9%</div>');
+    expect(card).toContain(">of your plays with genre tags were shoegaze</div>");
+    expect(card).toContain(`${B("“Midnight City”")} didn’t hurt`);
+    expect(out.html).toContain("“Tom &amp; Jerry” all month<br>");
+    expect(out.text).toContain("More shoegaze\n  9% of your plays with genre tags were shoegaze\n  “Midnight City” didn’t hurt");
   });
 
   it("escapes all copy and turns **phrases** into bold", () => {

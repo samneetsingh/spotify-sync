@@ -165,10 +165,17 @@ describe("computeHighlights", () => {
     });
     expect(find(hs, "genreShift")).toMatchObject({
       score: 1,
-      stat: { value: 50, unit: "percent indie" },
-      facts: { genre: "indie", nowPct: 50, beforePct: 15, deltaPts: 35, previousLabel: "August" },
+      stat: { value: 50, unit: "of your plays with genre tags were indie", percent: true },
+      facts: {
+        genre: "indie",
+        nowPct: 50,
+        beforePct: 15,
+        deltaPts: 35,
+        previousLabel: "August",
+        shareOf: "plays with genre tags (plays whose main artist has genres on Spotify), not all plays",
+      },
       defaultHeading: "More indie",
-      defaultInsight: "**indie** made up 50% of your plays, up from 15% in August.",
+      defaultInsight: "**indie** made up 50% of your plays with genre tags, up from 15% in August.",
     });
 
     expect(computeHighlights("month", SEP, [], TZ, { newObsession: { ...newObsession, plays: 5 } })).toEqual([]);
@@ -304,7 +311,7 @@ describe("loadHighlights", () => {
     expect(find(hs, "binge")?.facts).toEqual({ minutes: 150, hours: 2.5, plays: 3, dayLabel: "Saturday, October 3", startLabel: "3 PM" });
     expect(find(hs, "comebackTrack")?.facts).toEqual({ plays: 5, lastHeardLabel: "Jan 2025", yearsAway: 1, track: "Comeback" });
     expect(find(hs, "comebackArtist")?.facts).toEqual({ plays: 5, lastHeardLabel: "Jan 2025", yearsAway: 1, artist: "Classic" });
-    expect(find(hs, "genreShift")?.facts).toEqual({ genre: "hyperpop", nowPct: 47, beforePct: 0, deltaPts: 47, previousLabel: "last week" });
+    expect(find(hs, "genreShift")?.facts).toMatchObject({ genre: "hyperpop", nowPct: 47, beforePct: 0, deltaPts: 47, previousLabel: "last week" });
     expect(find(hs, "newObsession")?.facts).toEqual({ plays: 7, firstHeardLabel: "Sep 28", track: "New Love" });
     expect(find(hs, "streak")?.facts).toEqual({ days: 7, startLabel: "Sep 28", endLabel: "Oct 4", everyDay: "yes" });
   });

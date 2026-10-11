@@ -1,7 +1,8 @@
-// The digest's copy and middle sections, as a registry the AI editor (src/editor) can pick from,
-// reorder and re-word. Code still computes every number and chart: from outside, a section only gets
-// a heading and an optional insight sentence (`**bold**` allowed). Without a plan, defaultLayout()
-// is the fixed email: every section with data, in the original order, with the original copy.
+// The digest's copy and middle sections, as a registry the AI editor (src/editor) can reorder and
+// re-word. Code still computes every number and chart: from outside, a section only gets a heading
+// and an optional insight sentence (`**bold**` allowed). Every section with data is required, so the
+// editor never drops a chart. Without a plan, defaultLayout() is the fixed email: every section with
+// data, in the original order, with the original copy.
 
 import type { BaseSectionId, DigestKind, Highlight, PlanSection, ResolvedSection, SectionSpec } from "../editor/types";
 import type { RecapArtist, RecapTrack } from "../db/queries";
@@ -100,7 +101,6 @@ interface SectionDef {
   /** One line for the model. */
   shows: string;
   insightSlot: boolean;
-  required: boolean;
   heading: string | ((c: RenderCtx) => string);
   /** Whether there is data to show (sections without data are left out). */
   available: (d: DigestData) => boolean;
@@ -119,7 +119,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "feature",
     shows: "The most-played song: cover (on a vinyl record on phones), artists and play count",
     insightSlot: false,
-    required: true,
     heading: (c) => `Song of the ${c.unit}`,
     available: (d) => d.topTracks.length > 0,
     render: ({ d, t, top }, heading) => ({
@@ -131,7 +130,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "trackList",
     shows: "Songs #2 to #5 with covers and play-count bars",
     insightSlot: false,
-    required: true,
     heading: "Also on repeat",
     available: (d) => d.topTracks.length >= 2,
     render: ({ d, t, top }, heading) => {
@@ -146,7 +144,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "avatars",
     shows: "Top 5 artists with photos and play counts",
     insightSlot: false,
-    required: true,
     heading: "Top artists",
     available: (d) => d.topArtists.length > 0,
     render: ({ d, t }, heading) => {
@@ -158,7 +155,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "barList",
     shows: "Top genres (of each play's main artist) as horizontal bars with play counts",
     insightSlot: true,
-    required: false,
     heading: "Your sound",
     available: (d) => d.genres.length > 0,
     render: ({ d, t }, heading, ins) => ({
@@ -170,7 +166,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "columns",
     shows: "Plays per day of the month as columns, the busiest day highlighted",
     insightSlot: true,
-    required: false,
     heading: "Day by day",
     available: () => true,
     insight: ({ d }) => `Your biggest day was **${LONG_DAY.format(dateMs(addDays(d.period.start, busiest(d))))}**, with ${plays(d.days[busiest(d)]!)}.`,
@@ -183,7 +178,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "heatmap",
     shows: "Plays by weekday and hour as a 7 x 24 heatmap",
     insightSlot: true,
-    required: false,
     heading: "When you listen",
     available: () => true,
     insight: ({ d }) => {
@@ -196,7 +190,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "columns",
     shows: "Plays per month over the last 12 months, this month highlighted",
     insightSlot: true,
-    required: false,
     heading: "Your year",
     available: (d) => d.year.filter((m) => m.plays).length >= 2,
     insight: ({ d }) => {
@@ -222,7 +215,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "number + split + artistList",
     shows: "How many tracks were first listens, old favorites vs new finds as a split bar, and first-listen artists",
     insightSlot: true,
-    required: false,
     heading: "New to you",
     available: (d) => d.newTrackCount > 0 || d.newArtists.length > 0,
     render: ({ d, t }, heading, ins) => {
@@ -246,7 +238,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "artistList",
     shows: "Artists back after a year or more away, with when you last played them",
     insightSlot: true,
-    required: false,
     heading: "Welcome back",
     available: (d) => d.returning.length > 0,
     render: ({ d, t }, heading, ins) => {
@@ -263,7 +254,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "captionedTracks",
     shows: "Your top song in this month 1 and 5 years ago",
     insightSlot: true,
-    required: false,
     heading: "Throwback",
     available: (d) => d.throwbacks.length > 0,
     render: ({ d, t, monthName }, heading, ins) => {
@@ -278,7 +268,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "columns",
     shows: "Plays per day, Monday to Sunday, the busiest day highlighted",
     insightSlot: true,
-    required: false,
     heading: "Your week",
     available: () => true,
     insight: ({ d }) => `**${WEEKDAY.format(dateMs(addDays(d.period.start, busiest(d))))}** was your biggest day, with ${plays(d.days[busiest(d)]!)}.`,
@@ -291,7 +280,6 @@ const SECTIONS: Record<BaseSectionId, SectionDef> = {
     component: "columns",
     shows: "Plays per hour of the day, the peak hour highlighted",
     insightSlot: true,
-    required: false,
     heading: "Time of day",
     available: () => true,
     insight: ({ d }) => `Your peak hour was **${hourLabel(indexOfMax(byHour(d)))}**.`,
@@ -321,19 +309,20 @@ export function defaultCopy(id: BaseSectionId, d: DigestData): { heading: string
   return copyOf(SECTIONS[id], renderContext(d));
 }
 
-/** The catalog the editor chooses from, in default order. */
+/** The catalog the editor arranges, in default order. Every section with data is required. */
 export function sectionSpecs(kind: DigestKind, d: DigestData): SectionSpec[] {
   const c = renderContext(d);
   return ORDER[kind].map((id) => {
     const def = SECTIONS[id];
     const copy = copyOf(def, c);
+    const available = def.available(d);
     return {
       id,
       component: def.component,
       shows: def.shows,
       insightSlot: def.insightSlot,
-      required: def.required,
-      available: def.available(d),
+      required: available,
+      available,
       defaultHeading: copy.heading,
       defaultInsight: copy.insight,
     };
@@ -363,6 +352,7 @@ export function renderSection(c: RenderCtx, s: ResolvedSection): Block | null {
 export function highlightCard(c: RenderCtx, h: Highlight, heading: string, ins: string | null): Block {
   const { d, t } = c;
   const subj = h.subject;
+  const value = `${fmt(h.stat.value)}${h.stat.percent ? "%" : ""}`;
   let subject = "";
   if (subj) {
     const href = subj.type === "track" ? trackUrl(subj.id) : artistUrl(subj.id);
@@ -375,14 +365,14 @@ export function highlightCard(c: RenderCtx, h: Highlight, heading: string, ins: 
   const html = section(
     heading,
     card(
-      `<div style="${TY.number};color:${t.accent}">${fmt(h.stat.value)}</div><div style="${TY.body};color:${C.soft};margin-top:4px">${esc(h.stat.unit)}</div>` +
+      `<div style="${TY.number};color:${t.accent}">${value}</div><div style="${TY.body};color:${C.soft};margin-top:4px">${esc(h.stat.unit)}</div>` +
         (ins ? `<div style="${TY.body};color:${C.soft};margin-top:16px">${bold(ins)}</div>` : "") +
         subject,
     ),
   );
   const text = [
     heading,
-    `  ${fmt(h.stat.value)} ${h.stat.unit}`,
+    `  ${value} ${h.stat.unit}`,
     ...say(ins),
     ...(subj ? [`  ${subj.name}${subj.artists ? ` — ${subj.artists}` : ""}`] : []),
   ];

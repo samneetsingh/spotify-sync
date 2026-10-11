@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LIMITS } from "../../src/editor/prompt";
 import type { EditorInput } from "../../src/editor/types";
 import { allowedNumbers, numbersIn, validatePlan } from "../../src/editor/validate";
-import { monthInput, validPlan, weekInput } from "./fixtures";
+import { monthInput, monthSpecs, validPlan, weekInput } from "./fixtures";
 
 type Mutable = { [k: string]: any };
 
@@ -106,8 +106,11 @@ describe("validatePlan", () => {
       expect(verdict(all, input)).toBe("ok"); // every monthly section plus 3 highlights fits
 
       const allWeek = (p: Mutable) => (week(p), p.sections.push(...["week", "timeOfDay"].map((id) => ({ id, heading: "More", insight: null }))));
-      expect(LIMITS.maxSections.week).toBe(7);
-      expect(verdict(allWeek, weekInput())).toBe("too many sections: 8");
+      expect(LIMITS.maxSections.week).toBe(8);
+      expect(verdict(allWeek, weekInput())).toBe("ok"); // every weekly section plus 2 highlights fits
+      // A catalog bigger than the limit allows (never the case for real digests) still trips the cap.
+      expect(verdict((p) => p.sections.push(hl("hl:lateNight")), { ...weekInput(), specs: monthSpecs() })).toBe("too many highlights: 3");
+      expect(verdict((p) => p.sections.push({ id: "whenYouListen", heading: "More", insight: null }), { ...weekInput(), specs: monthSpecs() })).toBe("too many sections: 9");
     });
   });
 
@@ -140,6 +143,17 @@ describe("validatePlan", () => {
     it("allows two bold phrases and doesn't count the markers toward the limit", () => {
       expect(verdict(setInsight("sound", "**Pop** and **k-pop** led."))).toBe("ok");
       expect(verdict(setInsight("sound", `**${"x".repeat(LIMITS.insight - 2)}** a`))).toBe("ok");
+    });
+
+    it("allows song titles in curly quotes and curly apostrophes", () => {
+      const quoted = (p: Mutable) => {
+        p.lead = "“Espresso” by Sabrina Carpenter was your song of the month, and “Two Weeks” wasn’t far behind.";
+        p.headline = "“Espresso” all October";
+        section(p, "sound").insight = "**“The Feels”** kept k-pop close.";
+      };
+      expect(verdict(quoted)).toBe("ok");
+      // Number words inside a quoted title are part of the name, not a claim.
+      expect(verdict((p) => (p.lead = "“Seventeen Going Under” and “Two Weeks” stayed close."))).toBe("ok");
     });
   });
 
