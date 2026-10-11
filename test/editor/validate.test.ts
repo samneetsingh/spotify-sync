@@ -102,8 +102,12 @@ describe("validatePlan", () => {
         const extra = ["whenYouListen", "year", "welcomeBack", "throwback"].map((id) => ({ id, heading: "More", insight: null }));
         p.sections.push(...extra, hl("hl:lateNight"));
       };
-      expect(LIMITS.maxSections.month).toBe(12);
-      expect(verdict(all, input)).toBe("too many sections: 13");
+      expect(LIMITS.maxSections.month).toBe(13);
+      expect(verdict(all, input)).toBe("ok"); // every monthly section plus 3 highlights fits
+
+      const allWeek = (p: Mutable) => (week(p), p.sections.push(...["week", "timeOfDay"].map((id) => ({ id, heading: "More", insight: null }))));
+      expect(LIMITS.maxSections.week).toBe(7);
+      expect(verdict(allWeek, weekInput())).toBe("too many sections: 8");
     });
   });
 

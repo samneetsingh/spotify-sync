@@ -1,6 +1,6 @@
 // The AI editor's entry point for the digest jobs: one model call per digest, validated strictly.
-// Never throws. "off" = no key or the kill switch; "fallback" = anything went wrong (the job sends
-// the default email); "used" = a validated plan.
+// Never throws. "off" = not enabled (AI_EDITOR), no key, or the kill switch; "fallback" = anything
+// went wrong (the job sends the default email); "used" = a validated plan.
 //
 // Switches in `state`: `editor:mode` = "off" disables it; `editor:calls:<UTC YYYY-MM>` counts calls
 // (incremented before each call, in every write mode) and caps them at MAX_CALLS_PER_MONTH.
@@ -50,6 +50,7 @@ export async function planDigest(db: D1Database, cfg: EditorConfig, req: PlanReq
   };
 
   try {
+    if (!cfg.enabled) return done("off", null, "disabled");
     if (!cfg.apiKey) return done("off", null, "no key");
     if ((await getState(db, MODE_KEY)) === "off") return done("off", null, `${MODE_KEY} off`);
     const key = callsKey(req.now);

@@ -40,6 +40,7 @@ Secrets are set with `npx wrangler secret put <NAME>`:
 
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
 - `SYNC_FULL_SECRET` (only needed for `/sync-full`)
+- `OPENAI_API_KEY` (optional, for the [AI editor](#ai-editor-optional))
 
 Locally, the same names go in `.dev.vars`.
 
@@ -67,6 +68,27 @@ An expired Spotify login shows up as a failing sync. Its email has a **Reconnect
 ## Emails
 
 All emails (digests and alerts) are built from one small component library in `src/email/` (dark theme, tables and inline styles so Gmail and Apple Mail render them the same; phone layout first, upgraded on wide screens). Keep each email under ~100 KB, since Gmail clips longer ones. A dry run logs the subject, text and full HTML of a digest without sending it: `npx wrangler dev --env test --test-scheduled --port 8788 --var PUBLIC_URL:http://localhost:8788`, then `curl "http://localhost:8788/__scheduled?cron=5+8+*+*+*"`. The vinyl record image is `public/email/vinyl.png` (source and re-render command in `scripts/vinyl.html`).
+
+## AI editor (optional)
+
+The digests can have an AI editor. Once per digest it makes one call to OpenAI (Responses API, `gpt-6.1-sol`, strict JSON schema) that chooses which sections and highlight cards to show (a daily streak, late-night listening, one song all day, a long session, comebacks, a genre shift, a new obsession), puts them in order, picks a colour theme, and writes the headline, lead, preheader, section headings and one-line insights. The subject line stays as code writes it.
+
+Code computes every number, chart and card; the model only sees precomputed facts. Its plan is validated strictly: every number in its copy must appear in the input, no markup, links or emoji, length limits, required sections present. Anything wrong (API error, timeout, refusal, invalid plan, or an edited email over 100,000 bytes) sends the default email instead; the editor never fails the job. Each digest logs `{ job, editor: used | fallback | off, reason, model, ms, inputTokens, outputTokens, theme, sections }` plus the plan, so a fallback reason such as `number: lead 1,600` shows what to tune.
+
+**Turning it on.** It runs only when both are set:
+
+- `AI_EDITOR = "on"` in `wrangler.toml` `[vars]` (unset or anything else keeps it off; forks can leave it off).
+- The `OPENAI_API_KEY` secret: `npx wrangler secret put OPENAI_API_KEY`. Use a service-account key from a dedicated OpenAI project with a monthly budget. Locally it goes in `.dev.vars`; the test environment leaves `AI_EDITOR` unset, so preview it with `--var AI_EDITOR:on` on the dry-run command above.
+
+**What goes to OpenAI:** the digest's facts: the period, totals, top track and artist names with play counts, genres, the busiest day and peak hour, new and returning artists, throwbacks, the highlight cards' facts (with the Spotify ids of their songs or artists), the section catalog and the default copy. Nothing else from D1, and no tokens or email addresses. Requests set `store: false`, so OpenAI doesn't keep the response for later retrieval (its standard API data policy still applies).
+
+**Switches and cost.**
+
+- Kill switch, no deploy needed: `npx wrangler d1 execute spotify-sync --remote --command "INSERT INTO state(key,value) VALUES('editor:mode','off') ON CONFLICT(key) DO UPDATE SET value='off'"`. Delete the row to turn it back on.
+- Monthly cap: `state` `editor:calls:<UTC YYYY-MM>` counts calls (before each call, dry runs included); at 10 the digests use the default layout until the next month.
+- Cost: about $0.01-0.04 per digest with `gpt-6.1-sol` ($2 in / $10 out per million tokens; the first real runs used 2-3k input and 0.5-0.8k output tokens, about $0.01 each), so at most about $0.25 a month for 4-5 weekly digests and one recap; the cap bounds it at about $0.40.
+
+**Seasonal themes** don't need the AI: a digest whose last day falls in a season gets its colours and hero greeting (Halloween Oct 15 to Nov 1, winter holidays in December, new year in January, summer Jun 21 to Aug 31); other periods stay Spotify green. With the editor on, it picks between the default and that period's seasonal theme. All themes pass the contrast checks in `src/email/themes.ts`.
 
 ## Maintenance
 
@@ -105,7 +127,8 @@ src/
   index.ts            cron dispatcher, /sync-full and the reconnect routes; runs each job with alerts + D1 query count logging
   alerts.ts           failure / recovery / sync-gap emails
   reconnect.ts        one-click Spotify reconnect (single-use link -> Spotify login -> new refresh token)
-  email/              email design system: tokens + shell (layout.ts), blocks and charts (components.ts)
+  email/              email design system: tokens + shell (layout.ts), blocks and charts (components.ts), themes, the digest's section registry
+  editor/             optional AI editor for the digests: facts, highlights, prompt, plan validation, OpenAI client
   config.ts, env.ts   typed config from wrangler.toml vars and secrets
   jobs/               sync, artist-playlists, hindi-favorites, history-playlists, holiday-playlist, digest (weekly + monthly), owned-playlists, playlist-cache backfill
 public/               static files served on the custom domain (email images)

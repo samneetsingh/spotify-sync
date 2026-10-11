@@ -27,7 +27,7 @@ export const LIMITS = {
   heading: 40,
   insight: 160,
   maxHighlights: { month: 3, week: 2 },
-  maxSections: { month: 12, week: 7 },
+  maxSections: { month: 13, week: 7 },
 } as const;
 
 /** Strict-mode JSON schema: every property required, no extra keys, nullable insight. */

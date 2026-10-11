@@ -125,8 +125,9 @@ export interface EditorOutcome {
   reason?: string;
 }
 
-/** OpenAI Responses API settings. No key = editor off. `fetch` is injected by tests. */
+/** OpenAI Responses API settings. Off unless `enabled` (AI_EDITOR = "on") and a key is set. `fetch` is injected by tests. */
 export interface EditorConfig {
+  enabled: boolean;
   apiKey: string | null;
   fetch?: typeof fetch;
   timeoutMs?: number;

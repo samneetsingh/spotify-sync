@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { loadConfig, type Config } from "./config";
 import { countingD1 } from "./db/counting";
 import { migrate } from "./db/schema";
+import type { EditorConfig } from "./editor/types";
 import { runArtistPlaylists } from "./jobs/artist-playlists";
 import { runHindiFavorites } from "./jobs/hindi-favorites";
 import { runHistoryPlaylists } from "./jobs/history-playlists";
@@ -31,6 +32,9 @@ const alertConfig = (env: Env): AlertConfig => ({
   timeZone: env.TIME_ZONE || "UTC",
   publicUrl: env.PUBLIC_URL || undefined,
 });
+
+/** The digests' AI editor runs only with AI_EDITOR = "on" and an OPENAI_API_KEY secret. */
+const editorConfig = (env: Env): EditorConfig => ({ enabled: env.AI_EDITOR === "on", apiKey: env.OPENAI_API_KEY || null });
 
 /**
  * Runs one job with migrations applied, emails on failure/recovery, and logs its
@@ -75,8 +79,8 @@ export default {
         const daily: Array<[string, Job]> = [
           ["history-playlists", runHistoryPlaylists],
           ["holiday-playlist", runHolidayPlaylist],
-          ["weekly-digest", (cfg, db, sp) => runWeeklyDigest(cfg, db, sp, alertConfig(env))],
-          ["monthly-recap", (cfg, db, sp) => runMonthlyRecap(cfg, db, sp, alertConfig(env))],
+          ["weekly-digest", (cfg, db, sp) => runWeeklyDigest(cfg, db, sp, alertConfig(env), Date.now(), editorConfig(env))],
+          ["monthly-recap", (cfg, db, sp) => runMonthlyRecap(cfg, db, sp, alertConfig(env), Date.now(), editorConfig(env))],
         ];
         let failure: unknown;
         for (const [job, fn] of daily) {

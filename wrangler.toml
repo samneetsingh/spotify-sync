@@ -46,6 +46,10 @@ PUBLIC_URL = "https://spotify-sync.example.com"
 # The Spotify account this Worker syncs; the reconnect link refuses any other.
 SPOTIFY_USER_ID = "your-spotify-user"
 
+# The digests' optional AI editor (src/editor): "on" also needs the OPENAI_API_KEY secret.
+# Anything else (or unset) keeps the default layout. Kill switch: state `editor:mode` = off.
+AI_EDITOR = "on"
+
 # Failure alerts (src/alerts.ts). The binding can only send to this one address.
 ALERT_FROM = "spotify-sync@example.com"
 ALERT_EMAIL_TO = "spotify-sync@example.com"
@@ -57,6 +61,7 @@ allowed_sender_addresses = ["spotify-sync@example.com"]
 
 # Secrets (`wrangler secret put <NAME>`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
+#   OPENAI_API_KEY (optional: the digests' AI editor, used only with AI_EDITOR = "on")
 # The Spotify app must list https://spotify-sync.example.com/reconnect/callback as a redirect URI.
 
 [observability]
@@ -88,3 +93,5 @@ TIME_ZONE = "America/Los_Angeles"
 SPOTIFY_USER_ID = "your-spotify-user"
 # PUBLIC_URL unset: no reconnect links. For a dry-run preview with the vinyl image, pass
 #   --var PUBLIC_URL:https://spotify-sync.example.com
+# AI_EDITOR unset (off). To preview the AI editor (uses OPENAI_API_KEY from .dev.vars), pass
+#   --var AI_EDITOR:on

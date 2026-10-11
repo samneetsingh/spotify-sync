@@ -29,7 +29,7 @@ async function plan(respond: Respond, cfg: Partial<EditorConfig> = {}) {
   const f = fakeFetch(respond);
   let loads = 0;
   const load = async () => (loads++, monthInput());
-  const outcome = await planDigest(env.DB, { apiKey: TEST_KEY, fetch: f.fetch, maxRetries: 0, ...cfg }, { job: JOB, now: NOW, load });
+  const outcome = await planDigest(env.DB, { enabled: true, apiKey: TEST_KEY, fetch: f.fetch, maxRetries: 0, ...cfg }, { job: JOB, now: NOW, load });
   return { outcome, calls: f.calls, loads };
 }
 const good: Respond = () => json(responseBody(JSON.stringify(validPlan())));
@@ -193,6 +193,16 @@ describe("planDigest", () => {
     expect(entries()[0]).toEqual({ job: JOB, editor: "off", reason: "no key" });
   });
 
+  it("is off unless enabled (AI_EDITOR), even with a key, without reading state, loading or calling", async () => {
+    await setState(env.DB, "editor:calls:2026-11", String(MAX_CALLS_PER_MONTH)); // would be "monthly cap" if read
+    const { outcome, calls: requests, loads } = await plan(good, { enabled: false });
+    expect(outcome).toEqual({ status: "off", plan: null, reason: "disabled" });
+    expect(requests).toHaveLength(0);
+    expect(loads).toBe(0);
+    expect(await calls()).toBe(String(MAX_CALLS_PER_MONTH));
+    expect(entries()).toEqual([{ job: JOB, editor: "off", reason: "disabled" }]);
+  });
+
   it("is off with the kill switch", async () => {
     await setState(env.DB, "editor:mode", "off");
     const { outcome, calls: requests, loads } = await plan(good);
@@ -224,7 +234,7 @@ describe("planDigest", () => {
     const load = async () => {
       throw new Error("D1 hiccup");
     };
-    const outcome = await planDigest(env.DB, { apiKey: TEST_KEY, fetch: f.fetch }, { job: JOB, now: NOW, load });
+    const outcome = await planDigest(env.DB, { enabled: true, apiKey: TEST_KEY, fetch: f.fetch }, { job: JOB, now: NOW, load });
     expect(outcome).toEqual({ status: "fallback", plan: null, reason: "error:D1 hiccup" });
     expect(f.calls).toHaveLength(0);
     expect(await calls()).toBeNull();

@@ -19,6 +19,10 @@ export interface Env {
   PUBLIC_URL?: string;
   /** The Spotify account the Worker syncs; the reconnect link only accepts this one. */
   SPOTIFY_USER_ID?: string;
+  /** "on" turns on the digests' optional AI editor (needs OPENAI_API_KEY); anything else is off. */
+  AI_EDITOR?: string;
+  /** Secret for the AI editor (OpenAI); without it the digests use the default layout. */
+  OPENAI_API_KEY?: string;
 }
 
 export type WriteMode = "live" | "dry_run" | "shadow";

@@ -7,6 +7,8 @@ export default defineConfig({
       // Tests reset tables; never let them reach a remote D1.
       remoteBindings: false,
       wrangler: { configPath: "./wrangler.toml" },
+      // .dev.vars may hold a real OpenAI key; tests must never call the API (they inject fetch).
+      miniflare: { bindings: { OPENAI_API_KEY: "" } },
     }),
   ],
 });

@@ -3,7 +3,9 @@
 // hasn't gone out yet (state `recap:last_week` = ISO week, `recap:last_month` = YYYY-MM), so a failed
 // send is retried the next day. Only live mode sends; other modes log the text and HTML.
 // Sections without data are left out. Cover art comes from Spotify at send time; if that fails the
-// email still goes out with placeholder tiles.
+// email still goes out with placeholder tiles. The period's seasonal theme (src/email/themes.ts)
+// applies either way; the optional AI editor (src/editor) may re-order and re-word the email, and
+// any problem with it falls back to the default layout.
 
 import { sendEmail, type AlertConfig, type Email } from "../alerts";
 import type { Config } from "../config";
@@ -23,17 +25,21 @@ import {
   type RecapTrack,
 } from "../db/queries";
 import { getState, setState } from "../db/state";
-import type { ResolvedPlan, ThemeId } from "../editor/types";
+import { planDigest } from "../editor";
+import { buildEditorInput } from "../editor/input";
+import type { EditorConfig, ResolvedPlan, ThemeId } from "../editor/types";
 import { cardEnd, hero, playlistPills, tiles, type Art } from "../email/components";
 import { playlistUrl, shell } from "../email/layout";
 import { defaultLayout, digestCopy, renderContext, renderSection, statTiles } from "../email/sections";
-import { THEMES, tokensFor } from "../email/themes";
+import { THEMES, seasonalTheme, tokensFor } from "../email/themes";
 import type { SpotifyImage } from "../spotify/types";
 import type { SpotifyClient } from "../spotify/client";
 import { PLACEHOLDER_PREFIX, playlistStateKey } from "./owned-playlists";
 import { addDays, addMonths, isoWeek, weekdayIndex, zonedDate, zonedHour, zonedMidnight, type LocalDate } from "../utils/time";
 
 const YEAR_MS = 365 * 86_400_000;
+/** Gmail clips emails over 102 KB; an edited email above this is sent in the default layout. */
+const MAX_HTML_BYTES = 100_000;
 const THROWBACK_YEARS = [1, 5];
 /** Bumped when public/email/vinyl.png changes, so mail clients don't show a cached old one. */
 const VINYL_PATH = "/email/vinyl.png?v=1";
@@ -102,11 +108,14 @@ export interface DigestResult {
   sent: boolean;
 }
 
-export const runWeeklyDigest = (cfg: Config, db: D1Database, sp: ArtSource, alerts: AlertConfig, now = Date.now()) =>
-  runDigest("week", cfg, db, sp, alerts, now);
+/** The AI editor stays off unless the caller passes a config (src/index.ts: AI_EDITOR + OPENAI_API_KEY). */
+const EDITOR_OFF: EditorConfig = { enabled: false, apiKey: null };
 
-export const runMonthlyRecap = (cfg: Config, db: D1Database, sp: ArtSource, alerts: AlertConfig, now = Date.now()) =>
-  runDigest("month", cfg, db, sp, alerts, now);
+export const runWeeklyDigest = (cfg: Config, db: D1Database, sp: ArtSource, alerts: AlertConfig, now = Date.now(), editor = EDITOR_OFF) =>
+  runDigest("week", cfg, db, sp, alerts, now, editor);
+
+export const runMonthlyRecap = (cfg: Config, db: D1Database, sp: ArtSource, alerts: AlertConfig, now = Date.now(), editor = EDITOR_OFF) =>
+  runDigest("month", cfg, db, sp, alerts, now, editor);
 
 async function runDigest(
   kind: DigestKind,
@@ -115,6 +124,7 @@ async function runDigest(
   sp: ArtSource,
   alerts: AlertConfig,
   now: number,
+  editorCfg: EditorConfig,
 ): Promise<DigestResult | null> {
   const job = kind === "month" ? "monthly-recap" : "weekly-digest";
   const stateKey = kind === "month" ? "recap:last_month" : "recap:last_week";
@@ -126,7 +136,7 @@ async function runDigest(
     console.log(JSON.stringify({ job, period: period.key, skipped: "no plays" }));
     return null;
   }
-  const email = renderDigest(data);
+  const email = await composeDigest(job, db, sp, data, editorCfg, now);
   if (cfg.writeMode !== "live") {
     console.log(JSON.stringify({ job, writeMode: cfg.writeMode, period: period.key, would_send: email.subject, html_kb: Math.round(email.html!.length / 1024) }));
     console.log(email.text);
@@ -142,6 +152,27 @@ async function runDigest(
     throw new Error(`The ${period.key} ${kind === "month" ? "recap" : "digest"} email could not be sent; retrying tomorrow`);
   }
   return { period: period.key, sent };
+}
+
+/**
+ * The email for `data`: the editor's plan when it returns a valid one that fits under Gmail's clip
+ * size, else the default layout. The theme is the plan's, or the period's seasonal one.
+ */
+async function composeDigest(job: string, db: D1Database, sp: ArtSource, data: DigestData, editorCfg: EditorConfig, now: number): Promise<Email> {
+  const { plan } = await planDigest(db, editorCfg, { job, now, load: () => buildEditorInput(db, data, data.timeZone) });
+  const theme = plan?.theme ?? seasonalTheme(addDays(data.period.end, -1));
+  if (!plan) return renderDigest(data, { theme });
+
+  // Highlight cards show a song or artist the loader may not have fetched art for.
+  const subjects = plan.sections.flatMap((s) => (s.highlight?.subject && !(s.highlight.subject.id in data.art) ? [s.highlight.subject] : []));
+  const ids = (type: "track" | "artist") => subjects.filter((s) => s.type === type).map((s) => s.id);
+  const art = subjects.length ? { ...data.art, ...(await loadArt(sp, ids("track"), ids("artist"))) } : data.art;
+
+  const email = renderDigest({ ...data, art }, { plan, theme });
+  const bytes = new TextEncoder().encode(email.html ?? "").length;
+  if (bytes <= MAX_HTML_BYTES) return email;
+  console.warn(JSON.stringify({ job, editor: "fallback", reason: "size", bytes }));
+  return renderDigest(data, { theme });
 }
 
 // ---------------------------------------------------------------------------- data
