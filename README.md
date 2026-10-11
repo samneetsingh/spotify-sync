@@ -5,7 +5,7 @@ A Cloudflare Worker that keeps your Spotify library tidy from your listening his
 - **Every 10 minutes**: records recently played tracks in D1, adds new tracks to **Liked Songs**, and adds tracks with enough plays to a **frequent** playlist.
 - **03:00 UTC**: creates and fills **per-artist playlists** for artists you play a lot, respects tracks you remove, and stops managing playlists you delete.
 - **04:00 UTC**: fills a **Hindi/Desi favorites** playlist based on artist genres.
-- **08:05 UTC** (just after midnight in `TIME_ZONE`): rewrites two playlists from the whole history. **On This Day** holds each past year's most played tracks on today's date, oldest year first. **Forgotten Favorites** is a new weekly set of 50 songs you've played 20+ times but not in over a year. Both are created on their first run. The same daily run also keeps **Holiday Favorites** filled from October 1 to January 6: every song whose title marks it as a holiday song (Christmas, Jingle, Let It Snow, ...) that you've played 3+ times. It only adds, so songs you remove stay removed. On the first day of each month it emails a **monthly recap** of the previous month (top tracks and artists, new discoveries, artists you came back to, busiest day, throwbacks) to the alert address; a failed send is retried the next day.
+- **08:05 UTC** (just after midnight in `TIME_ZONE`): rewrites two playlists from the whole history. **On This Day** holds each past year's most played tracks on today's date, oldest year first. **Forgotten Favorites** is a new weekly set of 50 songs you've played 20+ times but not in over a year. Both are created on their first run. The same daily run also keeps **Holiday Favorites** filled from October 1 to January 6: every song whose title marks it as a holiday song (Christmas, Jingle, Let It Snow, ...) that you've played 3+ times. It only adds, so songs you remove stay removed. Every Monday it emails a **weekly digest** of the previous Monday-to-Sunday week, and on the first of each month a **monthly recap** of the previous month, to the alert address. Both show top tracks and artists with cover art, listening by day and hour, and new finds; the recap adds genres, a 12-month trend, comebacks and throwbacks. A failed send is retried the next day.
 
 All state lives in a D1 database (plays, tracks, artists, playlist contents). Playlists are built from that history, not from live API calls.
 
@@ -62,11 +62,15 @@ Failures email `ALERT_EMAIL_TO` through Cloudflare Email Service:
 - **A job throws:** you get an immediate alert, a reminder every 6 hours while it keeps failing, and a note when it recovers.
 - **Syncs stop for more than 45 minutes:** you get a "sync resumed after a gap" email on the first run afterwards. While crons aren't firing at all, nothing can send mail; the gap email arrives once they resume.
 
-An expired Spotify login shows up as a failing sync, and the email tells you to run `npm run token`.
+An expired Spotify login shows up as a failing sync. Its email has a **Reconnect Spotify** button: it opens Spotify's login and brings you back to the Worker, which saves the new refresh token and syncs right away (you then get the "recovered" email). The link works once, expires after 7 days, and only accepts the account in `SPOTIFY_USER_ID`; reminders reuse it. `npm run token` still works as the fallback. This needs the Spotify app to list `https://spotify-sync.example.com/reconnect/callback` as a redirect URI.
+
+## Emails
+
+All emails (digests and alerts) are built from one small component library in `src/email/` (dark theme, tables and inline styles so Gmail and Apple Mail render them the same; phone layout first, upgraded on wide screens). Keep each email under ~100 KB, since Gmail clips longer ones. A dry run logs the subject, text and full HTML of a digest without sending it: `npx wrangler dev --env test --test-scheduled --port 8788 --var PUBLIC_URL:http://localhost:8788`, then `curl "http://localhost:8788/__scheduled?cron=5+8+*+*+*"`. The vinyl record image is `public/email/vinyl.png` (source and re-render command in `scripts/vinyl.html`).
 
 ## Maintenance
 
-**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). The Worker has no public URL, so run it on Cloudflare's edge against production:
+**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). It is served on the custom domain (`curl -X POST https://spotify-sync.example.com/sync-full -H "Authorization: Bearer $SECRET"`, needs the `SYNC_FULL_SECRET` secret set), or run it on Cloudflare's edge against production:
 
 ```bash
 npx wrangler dev --remote          # uses production bindings and .dev.vars
@@ -98,10 +102,13 @@ scripts/verify-counts.sh data/restored.db spotify-sync   # must exit 0
 
 ```
 src/
-  index.ts            cron dispatcher + /sync-full; runs each job with alerts + D1 query count logging
+  index.ts            cron dispatcher, /sync-full and the reconnect routes; runs each job with alerts + D1 query count logging
   alerts.ts           failure / recovery / sync-gap emails
+  reconnect.ts        one-click Spotify reconnect (single-use link -> Spotify login -> new refresh token)
+  email/              email design system: tokens + shell (layout.ts), blocks and charts (components.ts)
   config.ts, env.ts   typed config from wrangler.toml vars and secrets
-  jobs/               sync, artist-playlists, hindi-favorites, history-playlists, holiday-playlist, monthly-recap, owned-playlists, playlist-cache backfill
+  jobs/               sync, artist-playlists, hindi-favorites, history-playlists, holiday-playlist, digest (weekly + monthly), owned-playlists, playlist-cache backfill
+public/               static files served on the custom domain (email images)
   db/                 schema migrations, bulk json_each queries, state, query counter
   spotify/            fetch-based client (token refresh, retries, write gating), types, parsers
 scripts/              local tools (token, import-history, live-write-test, verify-counts)

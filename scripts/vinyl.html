@@ -1,0 +1,49 @@
+<!--
+  The vinyl record in the digest emails (public/email/vinyl.png): a transparent PNG with a see-through
+  label that the album cover shows through (src/email/components.ts, vinyl()). Drawn at 3x: 648 x 648
+  shown at 216 x 216, label window centered at (108, 100) with an 81px diameter. Re-render with:
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+      --default-background-color=00000000 --window-size=648,648 --screenshot=public/email/vinyl.png "file://$PWD/scripts/vinyl.html"
+  then bump VINYL_PATH in src/jobs/digest.ts so mail clients fetch the new one.
+-->
+<!doctype html><html><head><meta charset="utf-8"><style>
+/* Drawn at 3x. Canvas 648 = disc 528 + shadow room (36 top, 84 bottom, 60 sides). Email shows it at 216 x 216. */
+:root{--k:3;--D:528px;--L:0.46}
+html,body{margin:0;background:transparent}
+.canvas{position:relative;width:648px;height:648px}
+.c{position:absolute;left:60px;top:36px;width:var(--D);height:var(--D);border-radius:50%}
+/* 1. contact + ambient shadow (transparent fill: shadow only paints outside the disc) */
+.shadow{box-shadow:0 42px 66px rgba(0,0,0,.55),0 12px 24px rgba(0,0,0,.45),0 3px 6px rgba(0,0,0,.5)}
+/* 2. the disc, masked so the label area stays transparent for the album cover */
+.disc{
+  background:
+    /* two opposite light wedges that don't move with the record */
+    conic-gradient(from 28deg,rgba(255,255,255,.20),rgba(255,255,255,0) 6% 44%,rgba(255,255,255,.14) 50%,rgba(255,255,255,0) 56% 94%,rgba(255,255,255,.20)),
+    /* soft diagonal glare */
+    linear-gradient(135deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.05) 48%,rgba(255,255,255,0) 66%),
+    /* smooth bands: lead-in at the rim, gaps between songs, run-out near the label */
+    radial-gradient(circle closest-side,rgba(0,0,0,0) 0 54%,#151515 54% 58.5%,rgba(0,0,0,0) 58.5% 71%,#191919 71% 71.8%,rgba(0,0,0,0) 71.8% 84%,#191919 84% 84.8%,rgba(0,0,0,0) 84.8% 95.5%,#171717 95.5% 100%),
+    /* fine grooves */
+    repeating-radial-gradient(circle,#0d0d0d 0 1.6px,#1a1a1a 1.6px 3.4px,#121212 3.4px 4.6px),
+    #111;
+  -webkit-mask:radial-gradient(circle closest-side,transparent 0 46%,#000 calc(46% + 1px));
+          mask:radial-gradient(circle closest-side,transparent 0 46%,#000 calc(46% + 1px));
+  box-shadow:inset 0 0 0 3px rgba(255,255,255,.05),inset 0 6px 6px -4px rgba(255,255,255,.10);
+}
+/* 3. rim catch-light on the upper left edge */
+.rim{background:transparent;border:3px solid transparent;
+  -webkit-mask:radial-gradient(circle closest-side,transparent 0 98.6%,#000 99%);mask:radial-gradient(circle closest-side,transparent 0 98.6%,#000 99%);
+  background-image:conic-gradient(from 250deg,rgba(255,255,255,.28),rgba(255,255,255,0) 18%,rgba(255,255,255,0) 82%,rgba(255,255,255,.28));box-sizing:border-box}
+/* 4. label overlay: semi-transparent gloss and an inset edge over the album cover */
+.label{left:calc(60px + var(--D) * (1 - var(--L)) / 2);top:calc(36px + var(--D) * (1 - var(--L)) / 2);width:calc(var(--D) * var(--L));height:calc(var(--D) * var(--L));
+  background:
+    conic-gradient(from 28deg,rgba(255,255,255,.16),rgba(255,255,255,0) 7% 43%,rgba(255,255,255,.10) 50%,rgba(255,255,255,0) 57% 93%,rgba(255,255,255,.16)),
+    radial-gradient(circle at 34% 28%,rgba(255,255,255,.14),rgba(255,255,255,0) 55%),
+    radial-gradient(circle closest-side,rgba(0,0,0,0) 0 84%,rgba(0,0,0,.28) 100%);
+  box-shadow:inset 0 0 0 3px rgba(0,0,0,.55),inset 0 0 0 5px rgba(255,255,255,.06)}
+/* 5. spindle hole (shows the card surface underneath) */
+.hole{left:calc(60px + var(--D) / 2 - 15px);top:calc(36px + var(--D) / 2 - 15px);width:30px;height:30px;
+  background:radial-gradient(circle at 50% 40%,#0b0b0b,#1c1c1c 70%);box-shadow:inset 0 3px 4px rgba(0,0,0,.8),0 0 0 3px rgba(255,255,255,.10),0 0 0 5px rgba(0,0,0,.35)}
+</style></head><body><div class="canvas">
+<div class="c shadow"></div><div class="c disc"></div><div class="c rim"></div><div class="c label"></div><div class="c hole"></div>
+</div></body></html>

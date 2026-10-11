@@ -15,6 +15,10 @@ export interface Env {
   ALERT_EMAIL?: SendEmail;
   ALERT_FROM?: string;
   ALERT_EMAIL_TO?: string;
+  /** The Worker's public origin, e.g. https://spotify-sync.example.com (reconnect links, email images). */
+  PUBLIC_URL?: string;
+  /** The Spotify account the Worker syncs; the reconnect link only accepts this one. */
+  SPOTIFY_USER_ID?: string;
 }
 
 export type WriteMode = "live" | "dry_run" | "shadow";

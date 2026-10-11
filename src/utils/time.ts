@@ -18,6 +18,16 @@ export function zonedDate(ms: number, timeZone: string): LocalDate {
   return { year: p.year, month: p.month, day: p.day };
 }
 
+/** The hour (0-23) of `ms` on the clock in `timeZone`. */
+export function zonedHour(ms: number, timeZone: string): number {
+  return zonedParts(ms, timeZone).hour;
+}
+
+/** Day of the week of a calendar date, Monday = 0 .. Sunday = 6. */
+export function weekdayIndex(date: LocalDate): number {
+  return (new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay() + 6) % 7;
+}
+
 /** UTC ms at which `date` starts in `timeZone` (DST-safe for zones that don't switch at midnight). */
 export function zonedMidnight(date: LocalDate, timeZone: string): number {
   const guess = Date.UTC(date.year, date.month - 1, date.day);

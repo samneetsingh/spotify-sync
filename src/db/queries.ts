@@ -613,19 +613,55 @@ export async function recapReturningArtists(
   return results;
 }
 
-/** Which [start, end) ms range (e.g. one per local day) has the most plays, by index; earliest wins ties. */
-export async function recapBusiestRange(
-  db: D1Database,
-  ranges: Array<[number, number]>,
-): Promise<{ range_index: number; plays: number } | null> {
-  if (!ranges.length) return null;
-  return db
+/** Every play time in the range (one query; the digest buckets them by local day and hour in JS). */
+export async function recapPlayTimes(db: D1Database, from: number, to: number): Promise<number[]> {
+  const { results } = await db
+    .prepare("SELECT played_at_ms AS t FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2 ORDER BY played_at_ms")
+    .bind(from, to)
+    .all<{ t: number }>();
+  return results.map((r) => r.t);
+}
+
+/** Plays in each [start, end) ms range, in order (e.g. one range per month). */
+export async function recapRangeCounts(db: D1Database, ranges: Array<[number, number]>): Promise<number[]> {
+  if (!ranges.length) return [];
+  const { results } = await db
     .prepare(
-      `SELECT r.key AS range_index, COUNT(*) AS plays
-       FROM json_each(?1) r
-       JOIN plays p ON p.played_at_ms >= json_extract(r.value, '$[0]') AND p.played_at_ms < json_extract(r.value, '$[1]')
-       GROUP BY r.key ORDER BY plays DESC, r.key LIMIT 1`,
+      `SELECT r.key AS i, (SELECT COUNT(*) FROM plays p
+                           WHERE p.played_at_ms >= json_extract(r.value, '$[0]') AND p.played_at_ms < json_extract(r.value, '$[1]')) AS plays
+       FROM json_each(?1) r ORDER BY r.key`,
     )
     .bind(JSON.stringify(ranges))
-    .first<{ range_index: number; plays: number }>();
+    .all<{ i: number; plays: number }>();
+  return results.map((r) => r.plays);
+}
+
+/** Most played genres in the range, counting each play once under its primary artist's genres. */
+export async function recapGenres(db: D1Database, from: number, to: number, limit: number): Promise<Array<{ genre: string; plays: number }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT g.value AS genre, COUNT(*) AS plays
+       FROM plays p
+       JOIN track_artists ta ON ta.track_id = p.track_id AND ta.position = 0
+       JOIN artists a ON a.artist_id = ta.artist_id,
+            json_each(CASE WHEN json_valid(a.genres) THEN a.genres ELSE '[]' END) g
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+       GROUP BY g.value ORDER BY plays DESC, g.value LIMIT ?3`,
+    )
+    .bind(from, to, limit)
+    .all<{ genre: string; plays: number }>();
+  return results;
+}
+
+/** Plays in the range of tracks that had been played before it. */
+export async function recapRepeatPlays(db: D1Database, from: number, to: number): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM plays p
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+         AND EXISTS (SELECT 1 FROM plays q WHERE q.track_id = p.track_id AND q.played_at_ms < ?1)`,
+    )
+    .bind(from, to)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
 }

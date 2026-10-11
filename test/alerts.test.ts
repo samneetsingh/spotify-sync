@@ -1,12 +1,13 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { REMIND_AFTER_MS, checkSyncGap, recordFailure, recordSuccess, remedy, type AlertConfig } from "../src/alerts";
+import { REMIND_AFTER_MS, checkSyncGap, localTime, recordFailure, recordSuccess, remedy, type AlertConfig } from "../src/alerts";
+import { getState } from "../src/db/state";
 import { migrate } from "../src/db/schema";
 import worker from "../src/index";
 import type { Env } from "../src/env";
 import { resetDb } from "./parity/spotify-fixture";
 
-type Sent = { from: unknown; to: unknown; subject: string; text?: string };
+type Sent = { from: unknown; to: unknown; subject: string; text?: string; html?: string };
 
 function fakeEmail(opts: { fail?: boolean } = {}) {
   const sent: Sent[] = [];
@@ -70,6 +71,62 @@ describe("failure alerts", () => {
   });
 });
 
+describe("reconnect link in login alerts", () => {
+  const withUrl = (cfg: AlertConfig): AlertConfig => ({ ...cfg, publicUrl: "https://sync.test", timeZone: "America/Los_Angeles" });
+  const loginError = new Error('Token refresh failed: 400 {"error":"invalid_grant","error_description":"Refresh token revoked"}');
+  const linkIn = (html: string) => html.match(/https:\/\/sync\.test\/reconnect\?k=([0-9a-f]{64})/)?.[1];
+
+  it("adds a one-click reconnect button and keeps the terminal fallback", async () => {
+    const { sent, cfg } = fakeEmail();
+    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, Date.UTC(2026, 9, 11, 10, 20));
+    const { html, text, subject } = sent[0]!;
+    expect(subject).toBe("[spotify-sync] sync failed");
+    expect(html).toContain("Spotify disconnected");
+    expect(html).toContain("Reconnect Spotify");
+    expect(linkIn(html!)).toBeDefined();
+    expect(text).toContain(`Reconnect Spotify: https://sync.test/reconnect?k=${linkIn(html!)}`);
+    expect(text).toContain("npm run token");
+    expect(text).toContain("Failing since: Sun, Oct 11, 3:20 AM PDT");
+    expect(html).toContain("&quot;invalid_grant&quot;"); // the error is escaped
+  });
+
+  it("reuses the link in reminders, replaces it near expiry, and drops it on recovery", async () => {
+    const { sent, cfg } = fakeEmail();
+    const t0 = Date.UTC(2026, 9, 11, 12);
+    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0);
+    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0 + REMIND_AFTER_MS);
+    expect(linkIn(sent[1]!.html!)).toBe(linkIn(sent[0]!.html!));
+    await recordFailure(env.DB, withUrl(cfg), "sync", loginError, t0 + 6.5 * 86_400_000);
+    expect(linkIn(sent[2]!.html!)).not.toBe(linkIn(sent[0]!.html!));
+
+    await recordSuccess(env.DB, withUrl(cfg), "sync", t0 + 7 * 86_400_000);
+    expect(sent.at(-1)!.subject).toBe("[spotify-sync] sync recovered");
+    expect(await getState(env.DB, "reconnect")).toBeNull();
+  });
+
+  it("keeps the link when a job other than sync recovers", async () => {
+    const { sent, cfg } = fakeEmail();
+    await recordFailure(env.DB, withUrl(cfg), "sync", loginError);
+    await recordFailure(env.DB, withUrl(cfg), "holiday-playlist", loginError);
+    await recordSuccess(env.DB, withUrl(cfg), "holiday-playlist"); // e.g. out of season, no Spotify call
+    expect(await getState(env.DB, "reconnect")).not.toBeNull();
+    expect(linkIn(sent[1]!.html!)).toBe(linkIn(sent[0]!.html!));
+  });
+
+  it("has no link for other errors or without a public URL", async () => {
+    const { sent, cfg } = fakeEmail();
+    await recordFailure(env.DB, withUrl(cfg), "sync", new Error("Spotify API GET → 500"));
+    await recordFailure(env.DB, cfg, "artist-playlists", loginError);
+    expect(sent.map((s) => s.html!.includes("/reconnect?k="))).toEqual([false, false]);
+    expect(sent[1]!.text).toContain("npm run token");
+  });
+
+  it("formats times in the alert time zone", () => {
+    expect(localTime(Date.UTC(2026, 0, 5, 18, 5), "America/Los_Angeles")).toBe("Mon, Jan 5, 10:05 AM PST");
+    expect(localTime(Date.UTC(2026, 0, 5, 18, 5))).toBe("Mon, Jan 5, 6:05 PM UTC");
+  });
+});
+
 describe("sync gap alert", () => {
   const insertRun = (startedAt: string) =>
     env.DB.prepare("INSERT INTO sync_runs(started_at, status) VALUES(?1, 'success')").bind(startedAt).run();
@@ -126,6 +183,7 @@ describe("scheduled handler", () => {
     expect(sent.map((s) => s.subject)).toEqual([
       "[spotify-sync] history-playlists failed",
       "[spotify-sync] holiday-playlist failed",
+      "[spotify-sync] weekly-digest failed",
       "[spotify-sync] monthly-recap failed",
     ]);
   });

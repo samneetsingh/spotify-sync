@@ -7,9 +7,11 @@ import { runArtistPlaylists } from "./jobs/artist-playlists";
 import { runHindiFavorites } from "./jobs/hindi-favorites";
 import { runHistoryPlaylists } from "./jobs/history-playlists";
 import { runHolidayPlaylist } from "./jobs/holiday-playlist";
-import { runMonthlyRecap } from "./jobs/monthly-recap";
+import { runMonthlyRecap, runWeeklyDigest } from "./jobs/digest";
 import { runSync, runSyncFull } from "./jobs/sync";
+import { handleReconnect } from "./reconnect";
 import { SpotifyClient } from "./spotify/client";
+import { constantTimeEqual } from "./utils/crypto";
 
 /** Alert bookkeeping must never fail the job itself. */
 async function quietly(what: string, fn: () => Promise<void>): Promise<void> {
@@ -22,7 +24,13 @@ async function quietly(what: string, fn: () => Promise<void>): Promise<void> {
 
 type Job = (config: Config, db: D1Database, sp: SpotifyClient) => Promise<unknown>;
 
-const alertConfig = (env: Env): AlertConfig => ({ binding: env.ALERT_EMAIL, from: env.ALERT_FROM, to: env.ALERT_EMAIL_TO });
+const alertConfig = (env: Env): AlertConfig => ({
+  binding: env.ALERT_EMAIL,
+  from: env.ALERT_FROM,
+  to: env.ALERT_EMAIL_TO,
+  timeZone: env.TIME_ZONE || "UTC",
+  publicUrl: env.PUBLIC_URL || undefined,
+});
 
 /**
  * Runs one job with migrations applied, emails on failure/recovery, and logs its
@@ -67,7 +75,8 @@ export default {
         const daily: Array<[string, Job]> = [
           ["history-playlists", runHistoryPlaylists],
           ["holiday-playlist", runHolidayPlaylist],
-          ["monthly-recap", (cfg, db) => runMonthlyRecap(cfg, db, alertConfig(env))],
+          ["weekly-digest", (cfg, db, sp) => runWeeklyDigest(cfg, db, sp, alertConfig(env))],
+          ["monthly-recap", (cfg, db, sp) => runMonthlyRecap(cfg, db, sp, alertConfig(env))],
         ];
         let failure: unknown;
         for (const [job, fn] of daily) {
@@ -85,7 +94,14 @@ export default {
     }
   },
 
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Static files (public/, e.g. the email vinyl image) are served before the Worker runs.
+    const reconnect = await handleReconnect(request, env, () =>
+      // Sync right away with the new token; its success sends the "recovered" email.
+      ctx.waitUntil(withJob(env, "sync", runSync).catch(() => {})),
+    );
+    if (reconnect) return reconnect;
+
     const url = new URL(request.url);
     if (url.pathname !== "/sync-full" || request.method !== "POST") {
       return new Response("Not Found", { status: 404 });
@@ -104,17 +120,3 @@ export default {
     return Response.json(result);
   },
 };
-
-// Compares SHA-256 digests so timing depends on neither input's content nor length (Amendment A3).
-async function constantTimeEqual(a: string, b: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [dA, dB] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(a)),
-    crypto.subtle.digest("SHA-256", enc.encode(b)),
-  ]);
-  const vA = new Uint8Array(dA);
-  const vB = new Uint8Array(dB);
-  let diff = 0;
-  for (let i = 0; i < vA.length; i++) diff |= vA[i]! ^ vB[i]!;
-  return diff === 0;
-}

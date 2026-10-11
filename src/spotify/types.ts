@@ -12,6 +12,12 @@ export interface SpotifyArtistFull {
   genres?: string[] | null;
   popularity?: number | null;
   followers?: { total?: number | null } | null;
+  images?: SpotifyImage[] | null;
+}
+
+export interface SpotifyImage {
+  url?: string | null;
+  width?: number | null;
 }
 
 export interface SpotifyTrack {
@@ -19,7 +25,7 @@ export interface SpotifyTrack {
   uri?: string | null;
   name?: string | null;
   artists?: SpotifyArtistSimple[] | null;
-  album?: { name?: string | null; release_date?: string | null } | null;
+  album?: { name?: string | null; release_date?: string | null; images?: SpotifyImage[] | null } | null;
   duration_ms?: number | null;
   explicit?: boolean | null;
   popularity?: number | null;
@@ -52,6 +58,7 @@ export interface PlaylistResponse {
 
 export interface UserProfile {
   id: string;
+  display_name?: string | null;
 }
 
 export interface CreatePlaylistResponse {

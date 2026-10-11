@@ -9,9 +9,9 @@
  */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
+import { SPOTIFY_SCOPE } from "../src/spotify/auth";
 import { DEFAULT_DB, flag, requireVars, seedRefreshToken, tokenRequest } from "./lib";
 
-const SCOPE = "user-read-recently-played playlist-modify-private user-library-modify user-library-read";
 const TIMEOUT_MS = 5 * 60_000;
 
 const db = flag("db", DEFAULT_DB);
@@ -26,7 +26,7 @@ const authUrl = new URL("https://accounts.spotify.com/authorize");
 authUrl.search = new URLSearchParams({
   response_type: "code",
   client_id: vars.SPOTIFY_CLIENT_ID!,
-  scope: SCOPE,
+  scope: SPOTIFY_SCOPE,
   redirect_uri: redirect.href,
   state,
   show_dialog: "true",

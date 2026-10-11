@@ -7,11 +7,16 @@ compatibility_flags = ["nodejs_compat"]
 # Production: `npx wrangler deploy`
 # ---------------------------------------------------------------------------
 
-# Crons fire internally; the only HTTP route is POST /sync-full (secret-protected).
-# Kept off (Amendment A3). For a repair run: set SYNC_FULL_SECRET, flip to true,
-# deploy, call it, flip back.
+# Crons fire internally. HTTP: POST /sync-full (secret-protected), the one-click Spotify
+# reconnect (/reconnect, /reconnect/callback; 404 without a valid single-use link) and the
+# static files in public/ (images used by the emails). workers.dev stays off (Amendment A3);
+# the Worker is reached only through its custom domain.
 workers_dev = false
 preview_urls = false
+routes = [{ pattern = "spotify-sync.example.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
 
 [triggers]
 # UTC, same times the Python server used. Never delete this Worker with crons live:
@@ -36,6 +41,11 @@ SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
 # "Today" for the history playlists (On This Day, Forgotten Favorites).
 TIME_ZONE = "America/Los_Angeles"
 
+# Public origin (custom domain above): reconnect links and email images.
+PUBLIC_URL = "https://spotify-sync.example.com"
+# The Spotify account this Worker syncs; the reconnect link refuses any other.
+SPOTIFY_USER_ID = "your-spotify-user"
+
 # Failure alerts (src/alerts.ts). The binding can only send to this one address.
 ALERT_FROM = "spotify-sync@example.com"
 ALERT_EMAIL_TO = "spotify-sync@example.com"
@@ -47,6 +57,7 @@ allowed_sender_addresses = ["spotify-sync@example.com"]
 
 # Secrets (`wrangler secret put <NAME>`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
+# The Spotify app must list https://spotify-sync.example.com/reconnect/callback as a redirect URI.
 
 [observability]
 enabled = true
@@ -59,6 +70,7 @@ enabled = true
 [env.test]
 name = "spotify-automation-test"
 workers_dev = false
+routes = []
 
 [[env.test.d1_databases]]
 binding = "DB"
@@ -73,3 +85,6 @@ SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
 FREQUENT_MIN_PLAYS = "5"
 SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
 TIME_ZONE = "America/Los_Angeles"
+SPOTIFY_USER_ID = "your-spotify-user"
+# PUBLIC_URL unset: no reconnect links. For a dry-run preview with the vinyl image, pass
+#   --var PUBLIC_URL:https://spotify-sync.example.com
