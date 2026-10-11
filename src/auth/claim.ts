@@ -1,4 +1,4 @@
-// Claim-on-first-use (tasks/dashboard-plan.md section 2.3). While the instance has no owner, the
+// Claim-on-first-use. While the instance has no owner, the
 // 10-minute cron emails a single-use setup link to ALERT_EMAIL_TO, the send_email binding's
 // verified destination, so only the person who deployed the instance can claim it. Links expire
 // after 7 days; automatic sends stop after 3, and the landing page's resend is limited to once an

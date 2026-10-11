@@ -77,7 +77,7 @@ describe("D1 schema migration", () => {
     it("moves the newest sync cursor to the fixed key, drops the others and the old reconnect key", async () => {
       await clear();
       await env.DB.batch([
-        env.DB.prepare("INSERT INTO state (key, value) VALUES ('cursor_after_ms:YOUR_ALL_PLAYLIST_ID', '1791700000001')"),
+        env.DB.prepare("INSERT INTO state (key, value) VALUES ('cursor_after_ms:0legacyAllPlaylistId00', '1791700000001')"),
         env.DB.prepare("INSERT INTO state (key, value) VALUES ('cursor_after_ms:default', '1700000000001')"),
         env.DB.prepare("INSERT INTO state (key, value) VALUES ('cursor_after_msXother', 'keep')"), // not a cursor key
         env.DB.prepare("INSERT INTO state (key, value) VALUES ('reconnect', '{}')"),

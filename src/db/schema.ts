@@ -214,7 +214,7 @@ const IMPORTS = [
 ];
 
 /**
- * v12, the dashboard replacing deploy vars (tasks/dashboard-plan.md 16.9): the parts that need no env.
+ * v12, the dashboard replacing deploy vars: the parts that need no env.
  * migrate() never sees env, so copying SPOTIFY_USER_ID, the playlist ids and TIME_ZONE / AI_EDITOR /
  * FREQUENT_MIN_PLAYS into `state` and `settings` is a one-time runtime step instead
  * (importLegacyConfig in src/runtime.ts).

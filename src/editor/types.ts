@@ -1,4 +1,4 @@
-// Contract for the optional AI editor of the digests (tasks/ai-digest-plan.md in the main checkout).
+// Contract for the optional AI editor of the digests.
 // Code computes every number and chart; the model only picks sections/highlights, orders them,
 // chooses a preset theme and writes short copy. Anything invalid falls back to the default email.
 

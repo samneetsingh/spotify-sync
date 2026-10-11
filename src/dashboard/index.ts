@@ -1,4 +1,4 @@
-// The owner dashboard (tasks/dashboard-plan.md section 5): GET / (landing or home), GET/POST
+// The owner dashboard: GET / (landing or home), GET/POST
 // /settings, GET /activity and the POST /actions/*. Auth, import and 404s are handled elsewhere
 // (src/index.ts routes in order: Origin check, auth, session, import, dashboard).
 //

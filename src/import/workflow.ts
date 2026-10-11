@@ -1,4 +1,4 @@
-// The import Workflow (tasks/dashboard-plan.md section 6.4). Every step is idempotent, so a replay or
+// The import Workflow. Every step is idempotent, so a replay or
 // a retry instance (`<id>-r<attempt>`) resumes where the last one stopped: staged entries are
 // skipped, applied months are guarded by `applied_to`, enrichment only selects rows still missing.
 

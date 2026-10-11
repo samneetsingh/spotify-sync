@@ -1,4 +1,4 @@
-// The Spotify OAuth round trip shared by claim, login and reconnect (tasks/dashboard-plan.md 2.4).
+// The Spotify OAuth round trip shared by claim, login and reconnect.
 // One redirect URI, <PUBLIC_URL>/auth/callback. Starting a login writes nothing to D1: the state
 // lives in a short-lived `__Host-oauth` cookie that needs no signature, because the callback
 // requires the `state` query param to equal the cookie's (a double-submit check; other sites can't

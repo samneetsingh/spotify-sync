@@ -1,4 +1,4 @@
-// Who owns this instance (tasks/dashboard-plan.md section 2.2). SPOTIFY_USER_ID, when set, wins
+// Who owns this instance. SPOTIFY_USER_ID, when set, wins
 // ("config"; existing deployments keep working with no migration); otherwise the account that
 // completed the emailed setup link, pinned in `state` ("claimed"). Unclaimed: null.
 

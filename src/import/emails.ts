@@ -1,4 +1,4 @@
-// The import's emails (tasks/dashboard-plan.md section 7): "ready to review", "imported" and
+// The import's emails: "ready to review", "imported" and
 // "failed", in the alert design. Sent through the ungated email config (the `alerts` setting can't
 // silence them) and recorded in the activity log.
 

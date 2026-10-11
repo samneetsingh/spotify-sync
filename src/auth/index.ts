@@ -1,4 +1,4 @@
-// Ownership, claim, login and sessions (tasks/dashboard-plan.md sections 2 and 3).
+// Ownership, claim, login and sessions.
 //
 // Routes (handleAuthRoutes; the router has already checked Origin on everything but GET/HEAD):
 // - GET  /login?next=&switch=1  owner only; 302 to Spotify (the __Host-oauth cookie carries state)

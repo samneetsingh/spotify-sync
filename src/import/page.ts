@@ -1,4 +1,4 @@
-// The Import page and the home page's Import card (tasks/dashboard-plan.md sections 5.2 and 6).
+// The Import page and the home page's Import card.
 // Server-rendered; progress pages refresh themselves, so only the upload needs JavaScript
 // (public/import.js). Everything from the export or the owner is escaped.
 

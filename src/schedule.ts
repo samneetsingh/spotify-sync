@@ -1,6 +1,6 @@
 // Cron dispatch: maps each cron string in wrangler.toml's [triggers] to its jobs. Change both together.
 //
-// Before any job (tasks/dashboard-plan.md 2.5): migrations and the one-time legacy import, then one
+// Before any job: migrations and the one-time legacy import, then one
 // gate query. Without an owner the 10-minute cron emails the setup link (ensureClaimEmail); without a
 // Spotify login nothing else runs (no "sync failed" alerts on a fresh instance). The two are
 // independent: an instance connected with `npm run token` keeps syncing while its setup email is out.

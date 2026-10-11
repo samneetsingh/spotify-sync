@@ -1,4 +1,4 @@
-// Login sessions (tasks/dashboard-plan.md section 3). The cookie holds an opaque random token;
+// Login sessions. The cookie holds an opaque random token;
 // D1 stores only its SHA-256, so a database export leaks no live sessions. Sessions last 30 days
 // (absolute), each login issues a fresh token (no fixation), "log out" deletes the row and "log out
 // everywhere" deletes them all. A session is valid only for the effective owner, so changing the

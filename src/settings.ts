@@ -1,4 +1,4 @@
-// Owner-adjustable settings (tasks/dashboard-plan.md section 4).
+// Owner-adjustable settings.
 // The types, keys and registry are the contract between the jobs (src/config.ts, src/runtime.ts)
 // and the settings page (src/dashboard).
 //
@@ -206,7 +206,7 @@ export const settingDef = <K extends SettingKey>(key: K): SettingDef<K> => REGIS
 export const isSettingKey = (key: string): key is SettingKey => Object.hasOwn(REGISTRY, key);
 
 /**
- * Deploy vars from before the dashboard (tasks/dashboard-plan.md 16.9). A deploy config renders
+ * Deploy vars from before the dashboard. A deploy config renders
  * them only while it still has those keys. Until then TIME_ZONE, FREQUENT_MIN_PLAYS, AI_EDITOR and
  * the Hindi id feed the deploy layer (`fromEnv`), and the Worker copies all of them into `settings`
  * and `state` once (importLegacyConfig in src/runtime.ts), so removing them changes nothing.

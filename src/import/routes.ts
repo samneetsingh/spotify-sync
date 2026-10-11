@@ -1,4 +1,4 @@
-// /import routes (tasks/dashboard-plan.md section 6.3). Owner only; the router has already checked
+// /import routes. Owner only; the router has already checked
 // Origin on every POST/PUT. The JSON endpoints serve public/import.js (multipart upload to R2 in
 // fixed-size parts); approve, cancel and retry are plain forms that redirect back to /import.
 

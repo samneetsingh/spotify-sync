@@ -363,7 +363,7 @@ describe("one-time import of the legacy deploy vars", () => {
   /** An instance deployed before the dashboard (ids made up). */
   const legacyEnv = (overrides: Partial<Env> = {}) =>
     testEnv({
-      SPOTIFY_USER_ID: "your-spotify-user",
+      SPOTIFY_USER_ID: "legacy-owner",
       SPOTIFY_ALL_PLAYLIST_ID: "all1",
       SPOTIFY_FREQUENT_PLAYLIST_ID: "freq1",
       SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID: "hindi1",
@@ -390,7 +390,7 @@ describe("one-time import of the legacy deploy vars", () => {
       "AI editor for digests: on",
       "Time zone: America/Los_Angeles",
     ]);
-    expect(await getState(env.DB, "owner:spotify_id")).toBe("your-spotify-user");
+    expect(await getState(env.DB, "owner:spotify_id")).toBe("legacy-owner");
     expect(await getState(env.DB, "playlist:frequent")).toBe("freq1");
     expect(await getState(env.DB, "playlist:hindi")).toBe("hindi1");
     expect(await getState(env.DB, LEGACY_IMPORTED_KEY)).toMatch(/^\d{4}-\d\d-\d\dT/);

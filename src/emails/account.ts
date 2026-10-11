@@ -1,4 +1,4 @@
-// Account emails (tasks/dashboard-plan.md section 7): the setup ("claim") link and the welcome note
+// Account emails: the setup ("claim") link and the welcome note
 // after connecting. Same design as the alerts. They go through the ungated email config, so the
 // `alerts` setting can't silence them, and they're sent in every write mode. The setup link appears
 // only in the body: never in the subject or in logs.

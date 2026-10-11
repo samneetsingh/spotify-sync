@@ -143,7 +143,7 @@ export const LEGACY_IMPORTED_KEY = "legacy_config:imported";
 
 /**
  * Copies the pre-dashboard deploy vars (LEGACY_VARS in src/settings.ts) into the database, once, so
- * the deploy config can then drop them without changing behaviour (tasks/dashboard-plan.md 16.9).
+ * the deploy config can then drop them without changing behaviour.
  * It runs only while a deploy config still renders them, i.e. an existing instance deploying this
  * version with its old config. This isn't a migration because migrate() never sees env.
  * - SPOTIFY_USER_ID -> `state` owner:spotify_id; SPOTIFY_FREQUENT_PLAYLIST_ID and
