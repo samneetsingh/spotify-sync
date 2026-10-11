@@ -11,7 +11,6 @@ export interface Env {
   /** IANA zone for the history playlists' "today" (e.g. America/Los_Angeles); defaults to UTC. */
   TIME_ZONE?: string;
   WRITE_MODE: string;
-  SYNC_FULL_SECRET: string;
   /** Failure alerts (optional): send_email binding plus sender/recipient addresses. */
   ALERT_EMAIL?: SendEmail;
   ALERT_FROM?: string;
@@ -24,6 +23,18 @@ export interface Env {
   AI_EDITOR?: string;
   /** Secret for the AI editor (OpenAI); without it the digests use the default layout. */
   OPENAI_API_KEY?: string;
+  /** Transient staging for history imports (R2, objects deleted after parsing). Import is hidden without it. */
+  IMPORTS?: R2Bucket;
+  /** The history import Workflow (`ImportWorkflow`, src/import). Import is hidden without it. */
+  IMPORT_WORKFLOW?: Workflow<ImportParams>;
+  /** Deploy-config layer of the dashboard settings: a JSON object of setting key -> value (src/settings.ts). */
+  SETTINGS?: string;
+}
+
+/** Parameters of one ImportWorkflow instance; a retry runs a new instance with the next attempt. */
+export interface ImportParams {
+  importId: string;
+  attempt: number;
 }
 
 export type WriteMode = "live" | "dry_run" | "shadow";

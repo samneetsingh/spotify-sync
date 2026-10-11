@@ -8,7 +8,7 @@
 // JSON itself, e.g. a Workers Builds build variable); deploy.config.json.
 // Output: --out, default wrangler.generated.toml. It must sit in the repo root, because the
 // template's paths (main, assets) are relative to the config file.
-// Keys and example values: deploy.config.example.json. Keys in DEFAULTS may be left out.
+// Keys and example values: deploy.config.example.json. Keys in DEFAULTS and OPTIONS may be left out.
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,8 +19,9 @@ const TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
 // Characters that would break out of (or corrupt) a TOML basic string.
 const UNSAFE = /["\\\u0000-\u001f\u007f]/;
 
-/** Optional keys. An empty playlist id switches that feature off. */
+/** Optional keys. An empty playlist id switches that feature off; no SPOTIFY_USER_ID means the setup link picks the owner. */
 export const DEFAULTS = {
+  SPOTIFY_USER_ID: "",
   SPOTIFY_ALL_PLAYLIST_ID: "",
   SPOTIFY_FREQUENT_PLAYLIST_ID: "",
   SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID: "",
@@ -29,23 +30,70 @@ export const DEFAULTS = {
 };
 
 /**
- * Substitutes every {{KEY}} in `template` with `config[KEY]` (or its default). Throws, naming
- * only the keys, when one is missing, empty (unless it has a default) or unsafe for TOML.
+ * Optional structured (lowercase) keys, not placeholders:
+ * - imports: false leaves out the template's {{#imports}} blocks (the R2 bucket and the Workflow
+ *   named <WORKER_NAME>-imports / <WORKER_NAME>-import, and their test copies).
+ * - settings: dashboard setting defaults for this deployment (src/settings.ts), written to the
+ *   SETTINGS var as JSON. Values are true/false, numbers or text.
+ */
+export const OPTIONS = { imports: true, settings: {} };
+
+// "# {{#name}}" ... "# {{/name}}" on lines of their own: kept (without the marker lines) or dropped.
+const SECTION = /^# \{\{#([a-z]+)\}\}\n([\s\S]*?)^# \{\{\/\1\}\}\n/gm;
+// R2 bucket names; Workflow names allow these too.
+const BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+/** Problems with the OPTIONS keys, naming keys only (never values). */
+function optionProblems(config) {
+  const problems = [];
+  if ("SETTINGS" in config) problems.push('use "settings" (an object), not SETTINGS');
+  if ("imports" in config && typeof config.imports !== "boolean") problems.push("imports must be true or false");
+  if ("settings" in config) {
+    const s = config.settings;
+    if (!s || typeof s !== "object" || Array.isArray(s)) {
+      problems.push("settings must be an object of setting key -> value");
+    } else {
+      const bad = Object.keys(s).filter((k) => !["boolean", "number", "string"].includes(typeof s[k]));
+      if (bad.length) problems.push(`settings values must be true/false, numbers or text: ${bad.join(", ")}`);
+      // SETTINGS is a TOML literal string ('...'): no apostrophes. JSON escapes control characters.
+      if (JSON.stringify(s).includes("'")) problems.push("settings can't contain apostrophes");
+    }
+  }
+  return problems;
+}
+
+/**
+ * Substitutes every {{KEY}} in `template` with `config[KEY]` (or its default) after resolving the
+ * {{#section}} blocks. SETTINGS is derived from `settings`. Throws, naming only the keys, when one
+ * is missing, empty (unless it has a default) or unsafe for TOML, or an option is invalid.
  * Returns the text and the config keys the template doesn't use.
  */
 export function render(template, config, source = "the deploy config") {
   if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error(`${source} must be a JSON object`);
-  const keys = [...new Set(Array.from(template.matchAll(TOKEN), (m) => m[1]))];
-  const values = { ...DEFAULTS, ...config };
-  const missing = keys.filter((k) => typeof values[k] !== "string" || (values[k] === "" && !(k in DEFAULTS)));
-  const unsafe = keys.filter((k) => typeof values[k] === "string" && UNSAFE.test(values[k]));
-  const problems = [];
+  const options = { ...OPTIONS, ...config };
+  const enabled = { imports: options.imports !== false };
+  const body = template.replace(SECTION, (_, name, inner) => {
+    if (!(name in enabled)) throw new Error(`wrangler.toml: unknown section {{#${name}}}`);
+    return enabled[name] ? inner : "";
+  });
+  if (/\{\{[#/]/.test(body)) throw new Error("wrangler.toml: a {{#section}} marker has no match (markers are whole lines: # {{#name}} ... # {{/name}})");
+  const keys = [...new Set(Array.from(body.matchAll(TOKEN), (m) => m[1]))];
+  const derived = { SETTINGS: JSON.stringify(typeof options.settings === "object" && options.settings ? options.settings : {}) };
+  const values = { ...DEFAULTS, ...config, ...derived };
+  const given = keys.filter((k) => !(k in derived));
+  const missing = given.filter((k) => typeof values[k] !== "string" || (values[k] === "" && !(k in DEFAULTS)));
+  const unsafe = given.filter((k) => typeof values[k] === "string" && UNSAFE.test(values[k]));
+  const problems = optionProblems(config);
   if (missing.length) problems.push(`missing or empty (strings required): ${missing.join(", ")}`);
   if (unsafe.length) problems.push(`quotes, backslashes or control characters in: ${unsafe.join(", ")}`);
+  if (enabled.imports) {
+    const names = ["WORKER_NAME", "TEST_WORKER_NAME"].filter((k) => typeof values[k] === "string" && values[k] && !BUCKET_NAME.test(`${values[k]}-imports`));
+    if (names.length) problems.push(`with imports on, <name>-imports must be a valid R2 bucket name (3-63 lowercase letters, digits, dashes): ${names.join(", ")}`);
+  }
   if (problems.length) throw new Error(`${source}: ${problems.join("; ")}. See deploy.config.example.json.`);
   return {
-    text: template.replace(TOKEN, (_, k) => values[k]),
-    unused: Object.keys(config).filter((k) => !keys.includes(k)),
+    text: body.replace(TOKEN, (_, k) => values[k]),
+    unused: Object.keys(config).filter((k) => !keys.includes(k) && !(k in OPTIONS)),
   };
 }
 

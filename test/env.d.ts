@@ -7,6 +7,8 @@ declare namespace Cloudflare {
     SPOTIFY_CLIENT_SECRET: string;
     SPOTIFY_ALL_PLAYLIST_ID?: string;
     WRITE_MODE: string;
-    SYNC_FULL_SECRET: string;
+    // Bound in tests (deploy.config.example.json leaves imports on): local R2 and Workflow.
+    IMPORTS: R2Bucket;
+    IMPORT_WORKFLOW: Workflow<import("../src/env").ImportParams>;
   }
 }

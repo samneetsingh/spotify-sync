@@ -1,6 +1,9 @@
 import { env } from "cloudflare:workers";
 import { describe, it, expect, beforeAll } from "vitest";
-import { EXPORT_PLAY_FIELDS, migrate } from "../../src/db/schema";
+import { EXPORT_PLAY_FIELDS, MIGRATIONS, migrate } from "../../src/db/schema";
+
+const columns = async (table: string) =>
+  (await env.DB.prepare(`SELECT name FROM pragma_table_info('${table}')`).all<{ name: string }>()).results.map((c) => c.name);
 
 describe("D1 schema migration", () => {
   beforeAll(async () => {
@@ -25,6 +28,7 @@ describe("D1 schema migration", () => {
     expect(names).toContain("state");
     expect(names).toContain("schema_migrations");
     expect(names).toContain("worker_actions");
+    expect(names).toEqual(expect.arrayContaining(["settings", "sessions", "activity", "imports", "import_plays"]));
   });
 
   it("is idempotent — running again is a no-op", async () => {
@@ -35,7 +39,7 @@ describe("D1 schema migration", () => {
     ).all<{ version: number }>();
 
     // v7 baseline records Python's 1-7 so a rollback export doesn't re-run them.
-    expect(versions.results.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(versions.results.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   });
 
   it("v9 adds the export's per-play fields to plays", async () => {
@@ -43,11 +47,33 @@ describe("D1 schema migration", () => {
     expect(cols.results.map((c) => c.name)).toEqual(expect.arrayContaining(EXPORT_PLAY_FIELDS.map(([name]) => name)));
   });
 
-  it("tolerates another job applying the same migration first", async () => {
-    // This job read version 8, then lost the race: its ALTER TABLE batch fails.
-    const versions = [8, 9];
+  it("v10 adds the dashboard tables", async () => {
+    expect(await columns("settings")).toEqual(["key", "value", "updated_at"]);
+    expect(await columns("sessions")).toEqual(["token_hash", "spotify_id", "created_at", "expires_at", "user_agent"]);
+    expect(await columns("activity")).toEqual(["id", "at", "kind", "ok", "summary", "detail"]);
+    const indexes = await env.DB.prepare("SELECT name FROM pragma_index_list('activity')").all<{ name: string }>();
+    expect(indexes.results.map((i) => i.name)).toContain("idx_activity_at");
+  });
+
+  it("v11 adds the import tables; staged plays carry every export field", async () => {
+    expect(await columns("imports")).toEqual([
+      "id", "created_at", "updated_at", "status", "files", "entries", "span_from", "span_to",
+      "preview", "options", "applied_to", "progress", "error", "attempt",
+    ]);
+    expect(await columns("import_plays")).toEqual([
+      "played_at_ms", "track_id", "track_uri", "name", "artists", "album", "explicit", ...EXPORT_PLAY_FIELDS.map(([name]) => name),
+    ]);
+    const pk = await env.DB.prepare("SELECT name FROM pragma_table_info('import_plays') WHERE pk > 0 ORDER BY pk").all<{ name: string }>();
+    expect(pk.results.map((c) => c.name)).toEqual(["played_at_ms", "track_id"]);
+  });
+
+  it("tolerates another job applying the same migrations first", async () => {
+    // This job read version 8, then lost the race: its ALTER TABLE batch fails, and every later
+    // migration is already applied by the winner.
+    const latest = MIGRATIONS.at(-1)!.version;
+    let reads = 0;
     const db = {
-      prepare: (sql: string) => ({ run: async () => ({}), first: async () => ({ version: versions.shift() }), sql }),
+      prepare: (sql: string) => ({ run: async () => ({}), first: async () => ({ version: reads++ === 0 ? 8 : latest }), sql }),
       batch: async () => {
         throw new Error("duplicate column name: ms_played");
       },

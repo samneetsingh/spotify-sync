@@ -137,6 +137,82 @@ export const EXPORT_PLAY_FIELDS = [
   ["incognito_mode", "INTEGER"],
 ] as const;
 
+/**
+ * The owner dashboard. Times are epoch ms.
+ * - settings: dashboard overrides only (src/settings.ts); value is JSON. No row = the deploy config or default applies.
+ * - sessions: login sessions; the cookie holds a random token, D1 only its SHA-256 (hex).
+ * - activity: what happened (jobs, emails, account, settings, imports) for the dashboard; pruned after 90 days.
+ */
+const DASHBOARD = [
+  `CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    spotify_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    user_agent TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 1,
+    summary TEXT NOT NULL,
+    detail TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at)`,
+];
+
+/**
+ * Streaming-history imports from the dashboard (src/import). Times are epoch ms.
+ * - imports: one row per import; status uploading|reading|review|applying|done|failed|cancelled|expired.
+ *   files = [{n,name,size,key,done}] (R2 keys are imports/<id>/<n>.<zip|json>, never user file names);
+ *   entries = {"<file n>/<entry name>": {records,skipped,short,from,to}}; applied_to = end (exclusive)
+ *   of the last applied month, part of each month's atomic batch so a replayed step deletes nothing.
+ * - import_plays: staged plays (>= 30 s) of the one active import, deleted as each month is applied.
+ */
+const IMPORTS = [
+  `CREATE TABLE IF NOT EXISTS imports (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    files TEXT NOT NULL DEFAULT '[]',
+    entries TEXT NOT NULL DEFAULT '{}',
+    span_from INTEGER,
+    span_to INTEGER,
+    preview TEXT,
+    options TEXT,
+    applied_to INTEGER,
+    progress TEXT,
+    error TEXT,
+    attempt INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS import_plays (
+    played_at_ms INTEGER NOT NULL,
+    track_id TEXT NOT NULL,
+    track_uri TEXT NOT NULL,
+    name TEXT,
+    artists TEXT,
+    album TEXT,
+    explicit INTEGER,
+    ms_played INTEGER,
+    platform TEXT,
+    conn_country TEXT,
+    reason_start TEXT,
+    reason_end TEXT,
+    shuffle INTEGER,
+    skipped INTEGER,
+    offline INTEGER,
+    incognito_mode INTEGER,
+    PRIMARY KEY (played_at_ms, track_id)
+  )`,
+];
+
 interface Migration {
   version: number;
   statements: string[];
@@ -150,6 +226,8 @@ export const MIGRATIONS: Migration[] = [
   { version: 7, statements: PYTHON_V7_SCHEMA, records: [1, 2, 3, 4, 5, 6, 7] },
   { version: 8, statements: WORKER_ACTIONS },
   { version: 9, statements: EXPORT_PLAY_FIELDS.map(([name, type]) => `ALTER TABLE plays ADD COLUMN ${name} ${type}`) },
+  { version: 10, statements: DASHBOARD },
+  { version: 11, statements: IMPORTS },
 ];
 
 export function migrationStatements(m: Migration): string[] {

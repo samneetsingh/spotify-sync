@@ -146,6 +146,7 @@ export function mockSpotify(spotify: Json): { calls: Call[]; restore: () => void
 }
 
 const APP_TABLES = [
+  "settings", "sessions", "activity", "imports", "import_plays",
   "worker_actions", "sync_runs", "state", "playlist_exclusions", "playlist_removals",
   "playlist_tracks", "playlists", "plays", "track_artists", "artists", "tracks",
 ];

@@ -170,8 +170,19 @@ export async function runSync(
   }
 }
 
-/** Port of sync_all_tracks (`spotify sync --full`): backfill Liked Songs and the frequent playlist from the whole DB. */
-export async function runSyncFull(cfg: Config, db: D1Database, sp: SpotifyClient): Promise<{ likedAdded: number; frequentAdded: number }> {
+export interface SyncFullResult {
+  likedAdded: number;
+  frequentAdded: number;
+  /** Tracks still to add after this call (0 when done); call again while it's above 0. */
+  remaining: number;
+}
+
+/**
+ * Port of sync_all_tracks (`spotify sync --full`): backfill Liked Songs and the frequent playlist
+ * from the whole DB. `limit` caps the tracks added per call (the import Workflow's steps).
+ */
+export async function runSyncFull(cfg: Config, db: D1Database, sp: SpotifyClient, opts: { limit?: number } = {}): Promise<SyncFullResult> {
+  if (opts.limit !== undefined) throw new Error("not implemented: runSyncFull limit (WP-B)");
   try {
     const likedMissing = await tracksMissingFrom(db, LIKED_CACHE_ID);
     let likedAdded = 0;
@@ -187,7 +198,7 @@ export async function runSyncFull(cfg: Config, db: D1Database, sp: SpotifyClient
     }
 
     console.log(JSON.stringify({ job: "sync-full", writeMode: cfg.writeMode, likedAdded, frequentAdded }));
-    return { likedAdded, frequentAdded };
+    return { likedAdded, frequentAdded, remaining: 0 };
   } finally {
     await recordActions(db, "sync-full", cfg.writeMode, null, sp.drainActions());
   }

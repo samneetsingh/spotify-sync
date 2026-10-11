@@ -1,54 +1,59 @@
 import { env } from "cloudflare:workers";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { describe, expect, it } from "vitest";
+import worker, { ImportWorkflow } from "../src/index";
 import type { Env } from "../src/env";
-import { migrate } from "../src/db/schema";
-import { mockSpotify, resetDb } from "./parity/spotify-fixture";
 
-const SECRET = "correct-horse-battery-staple";
 const testEnv = (overrides: Partial<Env> = {}): Env => ({
   ...(env as unknown as Env),
-  SPOTIFY_ALL_PLAYLIST_ID: "all1",
-  SPOTIFY_FREQUENT_PLAYLIST_ID: "",
+  PUBLIC_URL: "https://sync.test",
   WRITE_MODE: "dry_run",
-  SYNC_FULL_SECRET: SECRET,
   ...overrides,
 });
 const ctx = {} as ExecutionContext;
-const post = (headers: Record<string, string> = {}, path = "/sync-full") =>
-  new Request(`https://worker.test${path}`, { method: "POST", headers });
+const request = (path: string, init: RequestInit = {}) => new Request(`https://sync.test${path}`, init);
 
-let restore: (() => void) | undefined;
-beforeAll(() => migrate(env.DB));
-afterEach(() => restore?.());
-
-describe("POST /sync-full auth", () => {
-  it.each([
-    ["no header", {}],
-    ["wrong secret", { Authorization: "Bearer nope" }],
-    ["secret prefix", { Authorization: `Bearer ${SECRET.slice(0, -1)}` }],
-    ["non-bearer scheme", { Authorization: `Basic ${SECRET}` }],
-    ["empty bearer", { Authorization: "Bearer " }],
-  ])("rejects %s with 401", async (_label, headers) => {
-    const res = await worker.fetch(post(headers), testEnv(), ctx);
-    expect(res.status).toBe(401);
+describe("fetch router", () => {
+  it("404s paths no handler owns, with the HTML security headers", async () => {
+    const res = await worker.fetch(request("/nope"), testEnv(), ctx);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Security-Policy")).toMatch(/style-src 'nonce-[A-Za-z0-9+/=]+'/);
+    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
   });
 
-  it("rejects everything when the secret is unset", async () => {
-    const res = await worker.fetch(post({ Authorization: "Bearer " }), testEnv({ SYNC_FULL_SECRET: "" }), ctx);
-    expect(res.status).toBe(401);
-  });
-
-  it("runs the job with the correct secret", async () => {
-    await resetDb(env.DB);
-    restore = mockSpotify({}).restore;
-    const res = await worker.fetch(post({ Authorization: `Bearer ${SECRET}` }), testEnv(), ctx);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ writeMode: "dry_run", likedAdded: 0, frequentAdded: 0 });
-  });
-
-  it("404s other routes", async () => {
-    const res = await worker.fetch(new Request("https://worker.test/"), testEnv(), ctx);
+  it("no longer serves POST /sync-full", async () => {
+    const res = await worker.fetch(
+      request("/sync-full", { method: "POST", headers: { Origin: "https://sync.test", Authorization: "Bearer anything" } }),
+      testEnv(),
+      ctx,
+    );
     expect(res.status).toBe(404);
   });
+
+  it.each([
+    ["no Origin", {}],
+    ["another site", { Origin: "https://evil.test" }],
+    ["a sibling subdomain", { Origin: "https://evil.sync.test" }],
+    ["an opaque origin", { Origin: "null" }],
+    ["a cross-site fetch without Origin", { "Sec-Fetch-Site": "cross-site" }],
+  ])("blocks a POST from %s before any handler runs", async (_label, headers) => {
+    const res = await worker.fetch(request("/nope", { method: "POST", headers }), testEnv(), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it("blocks every POST when PUBLIC_URL is unset", async () => {
+    const res = await worker.fetch(request("/nope", { method: "POST", headers: { Origin: "https://sync.test" } }), testEnv({ PUBLIC_URL: undefined }), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it("lets same-origin POSTs through to the handlers", async () => {
+    const allowed: Array<Record<string, string>> = [{ Origin: "https://sync.test" }, { "Sec-Fetch-Site": "same-origin" }];
+    for (const headers of allowed) {
+      const res = await worker.fetch(request("/nope", { method: "POST", headers }), testEnv(), ctx);
+      expect(res.status).toBe(404);
+    }
+  });
+});
+
+it("exports the import Workflow class for its binding", () => {
+  expect(typeof ImportWorkflow).toBe("function");
 });

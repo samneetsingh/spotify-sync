@@ -13,5 +13,7 @@
   "AI_EDITOR": "off",
   "TEST_WORKER_NAME": "spotify-sync-test",
   "TEST_D1_DATABASE_NAME": "spotify-sync-test",
-  "TEST_D1_DATABASE_ID": "00000000-0000-4000-8000-000000000002"
+  "TEST_D1_DATABASE_ID": "00000000-0000-4000-8000-000000000002",
+  "imports": true,
+  "settings": {}
 }

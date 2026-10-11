@@ -14,12 +14,12 @@ compatibility_flags = ["nodejs_compat"]
 # Production: `npm run deploy`
 # ---------------------------------------------------------------------------
 
-# Crons fire internally. HTTP: POST /sync-full (secret-protected), the one-click Spotify
-# reconnect (/reconnect, /reconnect/callback; 404 without a valid single-use link) and the
-# static files in public/ (images used by the emails). workers.dev stays off; the Worker is
-# reached only through its custom domain: CUSTOM_DOMAIN, a hostname in a zone on your
-# Cloudflare account (e.g. spotify-sync.example.com). No domain? Delete the `routes` line and
-# PUBLIC_URL below: the crons still run, you only lose reconnect links and email images.
+# Crons fire internally. HTTP: the owner dashboard (log in with Spotify, settings, activity,
+# history import) and the static files in public/ (email images, the import uploader).
+# workers.dev stays off; the Worker is reached only through its custom domain: CUSTOM_DOMAIN, a
+# hostname in a zone on your Cloudflare account (e.g. spotify-sync.example.com). No domain? Delete
+# the `routes` line and PUBLIC_URL below: the crons still run, you only lose the dashboard,
+# reconnect links and email images.
 workers_dev = false
 preview_urls = false
 routes = [{ pattern = "{{CUSTOM_DOMAIN}}", custom_domain = true }]
@@ -55,9 +55,10 @@ SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "{{SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID}}"
 # IANA zone for "today" (history playlists, holiday season, digests, alert times). Default UTC.
 TIME_ZONE = "{{TIME_ZONE}}"
 
-# Public origin (custom domain above): reconnect links and email images.
+# Public origin (custom domain above): the dashboard, its Spotify login, email links and images.
 PUBLIC_URL = "https://{{CUSTOM_DOMAIN}}"
-# The Spotify username allowed to use reconnect links; they refuse any other account.
+# Optional: pins the owner's Spotify username; only that account can log in. Empty: the account
+# that completes the setup link (emailed to ALERT_EMAIL_TO) becomes the owner.
 SPOTIFY_USER_ID = "{{SPOTIFY_USER_ID}}"
 
 # Alerts and digests (src/alerts.ts) through Cloudflare Email Service. ALERT_FROM must be on a
@@ -68,14 +69,33 @@ ALERT_EMAIL_TO = "{{ALERT_EMAIL_TO}}"
 # The digests' optional AI editor (src/editor): "on" also needs the OPENAI_API_KEY secret;
 # "off" (the default) keeps the default layout. Runtime kill switch: state `editor:mode` = off.
 AI_EDITOR = "{{AI_EDITOR}}"
+# Dashboard settings for this deployment, from the deploy config's optional "settings" object
+# (keys and defaults: src/settings.ts). The owner can still change them on the dashboard.
+SETTINGS = '{{SETTINGS}}'
 
 [[send_email]]
 name = "ALERT_EMAIL"
 destination_address = "{{ALERT_EMAIL_TO}}"
 allowed_sender_addresses = ["{{ALERT_FROM}}"]
 
+# {{#imports}}
+# History import (dashboard > Import): the uploaded export is staged in R2 for minutes, then the
+# Workflow reads it, waits for the owner's approval and applies it. Create the bucket once, with an
+# object lifecycle rule deleting prefix imports/ after 7 days (README). Names derive from
+# WORKER_NAME (bucket and Workflow names are unique per account). "imports": false in the deploy
+# config leaves both out and hides the Import page.
+[[r2_buckets]]
+binding = "IMPORTS"
+bucket_name = "{{WORKER_NAME}}-imports"
+
+[[workflows]]
+binding = "IMPORT_WORKFLOW"
+name = "{{WORKER_NAME}}-import"
+class_name = "ImportWorkflow"
+# {{/imports}}
+
 # Secrets (`npx wrangler secret put <NAME> -c wrangler.generated.toml`; locally in .dev.vars):
-#   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
+#   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 #   OPENAI_API_KEY (optional: the digests' AI editor, used only with AI_EDITOR = "on")
 # The Spotify app must list https://<CUSTOM_DOMAIN>/reconnect/callback as a redirect URI.
 
@@ -98,6 +118,23 @@ database_name = "{{TEST_D1_DATABASE_NAME}}"
 database_id = "{{TEST_D1_DATABASE_ID}}"
 remote = true
 
+# Simulated locally: `wrangler dev` saves each email (setup links, previews) to a local file and
+# logs its path; nothing is sent.
+[[env.test.send_email]]
+name = "ALERT_EMAIL"
+
+# {{#imports}}
+# Simulated locally by `wrangler dev`; no bucket needed.
+[[env.test.r2_buckets]]
+binding = "IMPORTS"
+bucket_name = "{{TEST_WORKER_NAME}}-imports"
+
+[[env.test.workflows]]
+binding = "IMPORT_WORKFLOW"
+name = "{{TEST_WORKER_NAME}}-import"
+class_name = "ImportWorkflow"
+# {{/imports}}
+
 [env.test.vars]
 WRITE_MODE = "dry_run"
 SPOTIFY_ALL_PLAYLIST_ID = "{{SPOTIFY_ALL_PLAYLIST_ID}}"
@@ -106,8 +143,13 @@ FREQUENT_MIN_PLAYS = "5"
 SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "{{SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID}}"
 TIME_ZONE = "{{TIME_ZONE}}"
 SPOTIFY_USER_ID = "{{SPOTIFY_USER_ID}}"
+ALERT_FROM = "{{ALERT_FROM}}"
+ALERT_EMAIL_TO = "{{ALERT_EMAIL_TO}}"
 AI_EDITOR = "off"
-# PUBLIC_URL unset: no reconnect links. For a dry-run preview with the vinyl image, pass
+SETTINGS = '{{SETTINGS}}'
+# PUBLIC_URL unset: no dashboard (it refuses every POST), reconnect links or email images. For the
+# dashboard, pass --port 8788 --var PUBLIC_URL:http://127.0.0.1:8788 (cookies drop __Host-/Secure
+# on http://). For a dry-run preview with the vinyl image, pass
 #   --var PUBLIC_URL:https://<CUSTOM_DOMAIN>
 # AI_EDITOR is off here. To preview the AI editor (uses OPENAI_API_KEY from .dev.vars), pass
 #   --var AI_EDITOR:on
