@@ -155,6 +155,39 @@ async function runDigest(
 }
 
 /**
+ * The dashboard's "Send me a preview": the last complete week's or month's digest, built exactly
+ * like the real one (same data, editor and theme) but with "[Preview] " before the subject. It never
+ * reads or writes `recap:*`, so the real send still happens. An editor call counts toward the
+ * monthly cap like any other. Only live mode sends; other modes log it like runDigest. Null when
+ * the period has no plays.
+ */
+export async function previewDigest(
+  kind: DigestKind,
+  cfg: Config,
+  db: D1Database,
+  sp: ArtSource,
+  email: AlertConfig,
+  now = Date.now(),
+  editorCfg = EDITOR_OFF,
+): Promise<DigestResult | null> {
+  const job = kind === "month" ? "monthly-recap-preview" : "weekly-digest-preview";
+  const period = lastPeriod(kind, now, cfg.timeZone);
+  const data = await loadDigest(db, sp, period, cfg.timeZone, email.publicUrl);
+  if (!data) return null;
+  const composed = await composeDigest(job, db, sp, data, editorCfg, now);
+  const preview: Email = { ...composed, subject: `[Preview] ${composed.subject}` };
+  if (cfg.writeMode !== "live") {
+    console.log(JSON.stringify({ job, writeMode: cfg.writeMode, period: period.key, would_send: preview.subject, html_kb: Math.round(preview.html!.length / 1024) }));
+    console.log(preview.text);
+    console.log(preview.html);
+    return { period: period.key, sent: false };
+  }
+  const sent = await sendEmail(email, preview);
+  console.log(JSON.stringify({ job, period: period.key, sent }));
+  return { period: period.key, sent };
+}
+
+/**
  * The email for `data`: the editor's plan when it returns a valid one that fits under Gmail's clip
  * size, else the default layout. The theme is the plan's, or the period's seasonal one.
  */
