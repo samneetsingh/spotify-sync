@@ -88,7 +88,7 @@ describe("logout", () => {
     const other = await sessionCookie();
     const res = await worker.fetch(post("/logout", { cookie: mine }), testEnv(), ctx);
     expect(res.status).toBe(303);
-    expect(res.headers.get("Location")).toBe("/");
+    expect(res.headers.get("Location")).toBe("/?ok=logged-out"); // the landing page's "You're logged out."
     expect(setCookies(res).get("__Host-session")!.raw).toBe("__Host-session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure");
     expect(await getSession(get("/", mine), testEnv())).toBeNull();
     expect(await getSession(get("/", other), testEnv())).not.toBeNull();
@@ -106,6 +106,7 @@ describe("logout", () => {
     await sessionCookie();
     const res = await worker.fetch(post("/logout/all", { cookie: mine }), testEnv(), ctx);
     expect(res.status).toBe(303);
+    expect(res.headers.get("Location")).toBe("/?ok=logged-out");
     expect(await count()).toBe(0);
     expect(setCookies(res).get("__Host-session")!.raw).toContain("Max-Age=0");
     expect((await recentActivity(env.DB, 5)).map((a) => [a.kind, a.summary])).toEqual([["account", "Logged out everywhere"]]);

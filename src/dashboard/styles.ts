@@ -140,6 +140,15 @@ input[type=number]:hover,select:hover{border-color:${C.mute}}
 .confirm.invalid{border-color:${C.red};background:${tint.red}}
 .confirm.invalid strong{color:${C.red}}
 @supports selector(:has(*)){.gated>.confirm{display:none}.gated:has(.toggle:checked)>.confirm,.gated>.confirm.invalid{display:block}}
+/* Import upload: a file picker whose button matches .btn, and a slim green progress bar. */
+input[type=file]{display:block;width:100%;max-width:100%;padding:8px 0;color:${C.soft};font:inherit;${TY.meta};cursor:pointer}
+input[type=file]::file-selector-button{min-height:44px;margin-right:12px;padding:0 20px;border-radius:999px;border:1px solid ${C.line};background:${C.raised};color:${C.text};font:inherit;font-weight:700;cursor:pointer}
+input[type=file]:hover::file-selector-button{border-color:${C.mute}}
+progress{display:block;width:100%;height:8px;border:0;border-radius:999px;background:${C.raised};color:${C.green};overflow:hidden;-webkit-appearance:none;appearance:none}
+progress::-webkit-progress-bar{background:${C.raised};border-radius:999px}
+progress::-webkit-progress-value{background:${C.green};border-radius:999px}
+progress::-moz-progress-bar{background:${C.green};border-radius:999px}
+[hidden]{display:none!important}
 .savebar{position:sticky;bottom:0;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 -16px 32px;padding:12px 16px;background:${C.page};border-top:1px solid ${C.line}}
 
 /* Landing page: main.narrow is a flex column, so the disc (decorative) shows above the h1. */

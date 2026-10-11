@@ -247,8 +247,11 @@ async function sendWelcome(env: Env, me: SpotifyLogin, now: number): Promise<voi
   }
 }
 
+/** Back to the landing page with the "You're logged out." notice (src/dashboard FLASH). */
+const LOGGED_OUT = "/?ok=logged-out";
+
 async function logout(request: Request, env: Env): Promise<Response> {
-  return redirect303("/", { "Set-Cookie": await endSession(request, env) });
+  return redirect303(LOGGED_OUT, { "Set-Cookie": await endSession(request, env) });
 }
 
 async function logoutAll(request: Request, env: Env, now: number): Promise<Response> {
@@ -256,7 +259,7 @@ async function logoutAll(request: Request, env: Env, now: number): Promise<Respo
   if (!session) return authRequired(request);
   await endAllSessions(env.DB);
   await quietly("activity", () => logActivity(env.DB, "account", "Logged out everywhere", true, undefined, now));
-  return redirect303("/", { "Set-Cookie": await endSession(request, env) });
+  return redirect303(LOGGED_OUT, { "Set-Cookie": await endSession(request, env) });
 }
 
 /** constantTimeEqual for an optional query value (missing never matches). */
