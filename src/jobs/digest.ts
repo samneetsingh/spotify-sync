@@ -23,26 +23,11 @@ import {
   type RecapTrack,
 } from "../db/queries";
 import { getState, setState } from "../db/state";
-import {
-  artistList,
-  avatars,
-  axis,
-  barList,
-  captionedTracks,
-  cardEnd,
-  columns,
-  feature,
-  heatmap,
-  hero,
-  playlistPills,
-  split,
-  tiles,
-  trackList,
-  type Art,
-  type ArtistItem,
-  type TrackItem,
-} from "../email/components";
-import { C, TY, card, fmt, insight, playlistUrl, plays, section, shell, strong } from "../email/layout";
+import type { ResolvedPlan, ThemeId } from "../editor/types";
+import { cardEnd, hero, playlistPills, tiles, type Art } from "../email/components";
+import { playlistUrl, shell } from "../email/layout";
+import { defaultLayout, digestCopy, renderContext, renderSection, statTiles } from "../email/sections";
+import { THEMES, tokensFor } from "../email/themes";
 import type { SpotifyImage } from "../spotify/types";
 import type { SpotifyClient } from "../spotify/client";
 import { PLACEHOLDER_PREFIX, playlistStateKey } from "./owned-playlists";
@@ -281,154 +266,40 @@ async function ownedPlaylistLinks(db: D1Database): Promise<Array<{ name: string;
 
 // ---------------------------------------------------------------------------- rendering
 
-const utc = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { ...opts, timeZone: "UTC" });
-const dateMs = (d: LocalDate) => Date.UTC(d.year, d.month - 1, d.day);
-const MONTH = utc({ month: "long" });
-const MONTH_NARROW = utc({ month: "narrow" });
-const SHORT = utc({ month: "short", day: "numeric" });
-const LONG_DAY = utc({ weekday: "long", month: "long", day: "numeric" });
-const WEEKDAY = utc({ weekday: "long" });
-const WEEKDAYS = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"];
-const hourLabel = (h: number) => `${h % 12 || 12} ${h < 12 ? "AM" : "PM"}`;
-const pct = (now: number, before: number) => (before ? Math.round(((now - before) / before) * 100) : null);
-const indexOfMax = (xs: number[]) => xs.reduce((best, x, i) => (x > xs[best]! ? i : best), 0);
-
-const trackItem = (t: RecapTrack): TrackItem => ({ id: t.track_id, name: t.name ?? "Unknown track", artists: t.artists ?? "", plays: t.plays });
-const artistItem = (a: RecapArtist): ArtistItem => ({ id: a.artist_id, name: a.name, plays: a.plays });
-
-/** The digest as an email: subject, preheader, HTML and a plain-text version from the same data. */
-export function renderDigest(d: DigestData): Email {
-  const month = d.period.kind === "month";
-  const last = addDays(d.period.end, -1);
-  const monthName = MONTH.format(dateMs(d.period.start));
-  const [title, sub] = month ? [monthName, String(d.period.start.year)] : [`${SHORT.format(dateMs(d.period.start))} to`, SHORT.format(dateMs(last))];
-  const label = month ? `${monthName} ${d.period.start.year}` : `${title} ${sub}`;
-  const hours = Math.round(d.totals.ms / 3_600_000);
-  const top = d.topTracks[0] ? trackItem(d.topTracks[0]) : null;
-  const topArtist = d.topArtists[0]?.name;
-  const unit = month ? "month" : "week";
+/**
+ * The digest as an email: subject, preheader, HTML and a plain-text version from the same data.
+ * An editor `plan` replaces the headline, lead, preheader and the middle sections (code still renders
+ * every number and chart); `theme` recolours the accents and the hero. Without either this is the
+ * default email. The subject never changes.
+ */
+export function renderDigest(d: DigestData, opts: { plan?: ResolvedPlan | null; theme?: ThemeId } = {}): Email {
+  const { plan = null, theme = "default" } = opts;
+  const c = renderContext(d, tokensFor(theme));
+  const copy = digestCopy(d);
   const text: string[] = [];
   const html: string[] = [];
-  const add = (h: string, t: string[]) => {
-    html.push(h);
-    text.push("", ...t);
-  };
 
   // Hero and tiles
-  const change = d.previous ? pct(d.totals.plays, d.previous.totals.plays) : null;
-  const vsLast =
-    change === null ? "" : Math.abs(change) < 5 ? ", about the same as last week" : `, ${Math.abs(change)}% ${change < 0 ? "less" : "more"} than last week`;
-  const lead = [
-    `${plays(d.totals.plays)}${vsLast}.`,
-    top ? `${top.name} on repeat${topArtist ? `, ${topArtist} all ${unit}` : ""}.` : "",
-  ].join(" ").trim();
-  html.push(hero(`Your ${unit} in music`, title, sub, lead));
-  text.push(`Your ${unit} in music: ${label}`, lead);
-  const stat = (value: number, label: string, before?: number) => ({ value: fmt(value), label, delta: before === undefined ? undefined : pct(value, before) });
-  const p = d.previous;
-  const statTiles = month
-    ? [stat(hours, "hours"), stat(d.totals.tracks, "tracks"), stat(d.totals.artists, "artists")]
-    : [stat(d.totals.plays, "plays", p?.totals.plays), stat(hours, "hours", p ? Math.round(p.totals.ms / 3_600_000) : undefined), stat(d.newTrackCount, "new tracks", p?.newTrackCount)];
-  html.push(tiles(statTiles));
-  text.push(statTiles.map((s) => `${s.value} ${s.label}${s.delta == null ? "" : ` (${s.delta < 0 ? "" : "+"}${s.delta}%)`}`).join(" · "));
+  const { kicker, ornament } = THEMES[theme];
+  const lead = plan?.lead ?? copy.lead;
+  html.push(hero(`${ornament ? `${ornament} ` : ""}${kicker ?? `Your ${c.unit} in music`}`, plan?.headline ?? copy.title, plan ? copy.label : copy.sub, lead, c.t));
+  text.push(`Your ${c.unit} in music: ${copy.label}`, ...(plan ? [plan.headline] : []), lead);
+  const stats = statTiles(d);
+  html.push(tiles(stats));
+  text.push(stats.map((s) => `${s.value} ${s.label}${s.delta == null ? "" : ` (${s.delta < 0 ? "" : "+"}${s.delta}%)`}`).join(" · "));
 
-  // Top tracks and artists
-  if (top) {
-    add(feature(`Song of the ${unit}`, top, d.art[top.id], d.discUrl ?? undefined), [`Song of the ${unit}: ${top.name}${top.artists ? ` by ${top.artists}` : ""} (${plays(top.plays)})`]);
-  }
-  const rest = d.topTracks.slice(1).map(trackItem);
-  if (rest.length) {
-    add(trackList("Also on repeat", rest, d.art, 2, top!.plays), ["Also on repeat", ...rest.map((t, i) => `  ${i + 2}. ${t.name}${t.artists ? ` — ${t.artists}` : ""} (${plays(t.plays)})`)]);
-  }
-  if (d.topArtists.length) {
-    const artists = d.topArtists.map(artistItem);
-    add(avatars("Top artists", artists, d.art), ["Top artists", ...artists.map((a, i) => `  ${i + 1}. ${a.name} (${plays(a.plays)})`)]);
-  }
-  if (d.genres.length) {
-    add(section("Your sound", card(barList(d.genres.map((g) => ({ label: g.genre, value: g.plays }))))), ["Your sound", ...d.genres.map((g) => `  ${g.genre} (${plays(g.plays)})`)]);
-  }
-
-  // When you listened
-  const busiest = indexOfMax(d.days);
-  const busiestDay = addDays(d.period.start, busiest);
-  if (month) {
-    const sentence = `Your biggest day was ${LONG_DAY.format(dateMs(busiestDay))}, with ${plays(d.days[busiest]!)}.`;
-    const ends = [d.period.start, addDays(d.period.start, 14), last].map((x) => SHORT.format(dateMs(x)));
-    add(
-      section("Day by day", card(insight(`Your biggest day was ${strong(LONG_DAY.format(dateMs(busiestDay)))}, with ${plays(d.days[busiest]!)}.`) + columns(d.days, { highlight: busiest }) + axis(ends))),
-      ["Day by day", `  ${sentence}`],
-    );
-    const flat = d.hours.flat();
-    const peak = indexOfMax(flat);
-    const when = `${WEEKDAYS[Math.floor(peak / 24)]} around ${hourLabel(peak % 24)}`;
-    add(section("When you listen", card(insight(`You listen most on ${strong(when)}.`) + heatmap(d.hours))), ["When you listen", `  You listen most on ${when}.`]);
-  } else {
-    const day = WEEKDAY.format(dateMs(busiestDay));
-    add(
-      section("Your week", card(insight(`${strong(day)} was your biggest day, with ${plays(d.days[busiest]!)}.`) + columns(d.days, { height: 80, highlight: busiest, gap: 6 }) + axis(["M", "T", "W", "T", "F", "S", "S"]))),
-      ["Your week", `  ${day} was your biggest day, with ${plays(d.days[busiest]!)}.`],
-    );
-    const byHour = Array.from({ length: 24 }, (_, h) => d.hours.reduce((sum, row) => sum + row[h]!, 0));
-    const peak = indexOfMax(byHour);
-    add(
-      section("Time of day", card(insight(`Your peak hour was ${strong(hourLabel(peak))}.`) + columns(byHour, { height: 64, highlight: peak }) + axis(["12 AM", "12 PM", "11 PM"]))),
-      ["Time of day", `  Your peak hour was ${hourLabel(peak)}.`],
-    );
-  }
-  if (month && d.year.filter((m) => m.plays).length >= 2) {
-    const prev = d.year.at(-2)!;
-    const best = d.year[indexOfMax(d.year.map((m) => m.plays))]!;
-    const diff = pct(d.totals.plays, prev.plays);
-    const prevName = MONTH.format(dateMs(prev.month));
-    const bestName = MONTH.format(dateMs(best.month));
-    const trend = diff === null ? "" : `, ${diff < 0 ? "down" : "up"} ${Math.abs(diff)}% from ${prevName}`;
-    add(
-      section(
-        "Your year",
-        card(
-          insight(`${strong(plays(d.totals.plays))}${trend}. Your biggest month was ${strong(bestName)}.`) +
-            columns(d.year.map((m) => m.plays), { height: 72, highlight: 11, gap: 3 }) +
-            axis(d.year.map((m) => MONTH_NARROW.format(dateMs(m.month)))),
-        ),
-      ),
-      ["Your year", `  ${plays(d.totals.plays)}${trend}. Your biggest month was ${bestName}.`],
-    );
-  }
-
-  // Discoveries and comebacks
-  if (d.newTrackCount || d.newArtists.length) {
-    const newTracks = `track${d.newTrackCount === 1 ? "" : "s"} you'd never played before`;
-    const artists = d.newArtists.map(artistItem);
-    add(
-      section(
-        "New to you",
-        card(
-          `<div style="${TY.number};color:${C.green}">${fmt(d.newTrackCount)}</div><div style="${TY.body};color:${C.soft};margin-top:4px">${newTracks}</div>` +
-            `<div style="margin:16px 0 ${artists.length ? 24 : 0}px">${split({ label: "old favorites", value: d.repeatPlays }, { label: "new finds", value: d.totals.plays - d.repeatPlays })}</div>` +
-            (artists.length ? `<div style="${TY.meta};color:${C.mute};margin-bottom:4px">First listens</div>${artistList(artists, d.art)}` : ""),
-        ),
-      ),
-      ["New to you", `  ${fmt(d.newTrackCount)} ${newTracks}`, ...artists.map((a) => `  - ${a.name} (first listen, ${plays(a.plays)})`)],
-    );
-  }
-  if (d.returning.length) {
-    const since = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: d.timeZone });
-    const note = (a: RecapArtist & { last_before_ms: number }) => `${plays(a.plays)}, first since ${since.format(a.last_before_ms)}`;
-    add(
-      section("Welcome back", card(artistList(d.returning.map(artistItem), d.art, (a) => note(d.returning.find((r) => r.artist_id === a.id)!)))),
-      ["Welcome back", ...d.returning.map((a) => `  - ${a.name} (${note(a)})`)],
-    );
-  }
-  if (d.throwbacks.length) {
-    const items = d.throwbacks.map((tb) => ({ caption: `${monthName} ${tb.year}`, track: trackItem(tb.track), note: `Your top song that month, ${plays(tb.track.plays)}` }));
-    add(section("Throwback", card(captionedTracks(items, d.art))), ["Throwback", ...items.map((i) => `  - ${i.caption}: ${i.track.name}${i.track.artists ? ` — ${i.track.artists}` : ""} (${i.note.toLowerCase()})`)]);
+  // The middle: the plan's sections, else every section with data
+  for (const s of plan?.sections ?? defaultLayout(d.period.kind, d)) {
+    const block = renderSection(c, s);
+    if (!block) continue;
+    html.push(block.html);
+    text.push("", ...block.text);
   }
 
   html.push(playlistPills(d.playlists), cardEnd);
   if (d.playlists.length) text.push("", `Still updating in your library: ${d.playlists.map((l) => l.name).join(", ")}.`);
   text.push("", "Sent by spotify-sync.");
 
-  const subject = month ? `Your ${label} in music: ${plays(d.totals.plays)}` : `Your week in music, ${label}: ${plays(d.totals.plays)}`;
-  const preheader = `${plays(d.totals.plays)} and ${fmt(hours)} hour${hours === 1 ? "" : "s"}.${top ? ` Song of the ${unit}: ${top.name}${top.artists ? ` by ${top.artists}` : ""}.` : ""}`;
-  return { subject, text: text.join("\n").trim(), html: shell({ title: subject, preheader, body: html.join("\n") }) };
+  const preheader = plan?.preheader ?? copy.preheader;
+  return { subject: copy.subject, text: text.join("\n").trim(), html: shell({ title: copy.subject, preheader, body: html.join("\n") }) };
 }

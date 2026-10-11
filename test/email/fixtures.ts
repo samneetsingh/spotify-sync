@@ -1,6 +1,8 @@
 // Realistic digest data for the renderer tests (no D1): a September 2026 recap and the week of
-// Sep 28 - Oct 4. Some ids have no art on purpose, so the ♪ fallbacks render too.
+// Sep 28 - Oct 4, plus editor plans for them. Some ids have no art on purpose, so the ♪ fallbacks
+// render too. monthData/weekData feed the byte-for-byte snapshot: changing them changes its hashes.
 
+import type { Highlight, ResolvedPlan, ThemeId } from "../../src/editor/types";
 import type { DigestData } from "../../src/jobs/digest";
 
 const DISC = "https://sync.test/email/vinyl.png?v=1";
@@ -101,5 +103,88 @@ export function weekData(): DigestData {
     art: withArt(["w1", "w2", "w3", "wa1", "wa2", "wa3", "wn1"]),
     playlists: [{ name: "On This Day", url: "https://open.spotify.com/playlist/otd1" }],
     discUrl: DISC,
+  };
+}
+
+// ---------------------------------------------------------------------------- editor plans
+
+export const STREAK: Highlight = {
+  id: "hl:streak",
+  kind: "streak",
+  score: 0.77,
+  stat: { value: 23, unit: "days in a row" },
+  facts: { days: 23, startLabel: "Sep 3", endLabel: "Sep 25" },
+  defaultHeading: "Every single day",
+  defaultInsight: "You pressed play **23 days in a row**, Sep 3 to Sep 25.",
+};
+
+export const COMEBACK: Highlight = {
+  id: "hl:comebackTrack",
+  kind: "comebackTrack",
+  score: 0.66,
+  stat: { value: 14, unit: "plays after 2 years away" },
+  subject: { type: "track", id: "t2", name: "Midnight City", artists: "M83" },
+  facts: { plays: 14, lastHeardLabel: "May 2024", yearsAway: 2, track: "Midnight City" },
+  defaultHeading: "Back on rotation",
+  defaultInsight: "**Midnight City** is back: 14 plays, the first since May 2024.",
+};
+
+/** Its subject has no art: the card shows the ♪ tile. */
+export const OBSESSION: Highlight = {
+  id: "hl:newObsession",
+  kind: "newObsession",
+  score: 0.6,
+  stat: { value: 1234, unit: "plays since you found it" },
+  subject: { type: "track", id: "zz", name: "Brand New <3", artists: "Fresh & Co" },
+  facts: { plays: 1234, firstHeardLabel: "Sep 4", track: "Brand New <3" },
+  defaultHeading: "New obsession",
+  defaultInsight: "First heard on Sep 4, played **1,234 times** since.",
+};
+
+export function monthPlan(theme: ThemeId = "default"): ResolvedPlan {
+  return {
+    theme,
+    headline: "Tom & Jerry <Live> month",
+    lead: "1,564 plays, and Tom & Jerry <Live> wouldn't leave.",
+    preheader: "23 days in a row & a comeback from 2024",
+    sections: [
+      { id: "hl:streak", heading: "Every single day", insight: null, highlight: STREAK },
+      { id: "song", heading: "Your song of September", insight: null },
+      { id: "topArtists", heading: "Who you played", insight: null },
+      { id: "alsoOnRepeat", heading: "Close behind", insight: null },
+      { id: "hl:comebackTrack", heading: "Back on rotation", insight: "**Midnight City** came back after **2 years**.", highlight: COMEBACK },
+      { id: "dayByDay", heading: "The big Sunday", insight: "Sunday the 13th: **100 plays** & <b>no</b> skips" },
+      { id: "newToYou", heading: "Fresh finds", insight: "**96** tracks were new to you." },
+      { id: "hl:newObsession", heading: "New obsession", insight: "Found it this month, played it **1,234 times**.", highlight: OBSESSION },
+      { id: "whenYouListen", heading: "Your hours", insight: null },
+    ],
+  };
+}
+
+/** An artist comeback in a week: the subject is an artist (round photo). */
+export const COMEBACK_ARTIST: Highlight = {
+  id: "hl:comebackArtist",
+  kind: "comebackArtist",
+  score: 0.5,
+  stat: { value: 3, unit: "years away" },
+  subject: { type: "artist", id: "wa2", name: "Surfaces" },
+  facts: { plays: 15, lastHeardLabel: "Aug 2023", yearsAway: 3, artist: "Surfaces" },
+  defaultHeading: "Welcome back, Surfaces",
+  defaultInsight: "**Surfaces** again, for the first time since Aug 2023.",
+};
+
+export function weekPlan(theme: ThemeId = "default"): ResolvedPlan {
+  return {
+    theme,
+    headline: "Friday did the heavy lifting",
+    lead: "212 plays, with This Week on top.",
+    preheader: "Your week, with a comeback",
+    sections: [
+      { id: "song", heading: "Song of the week", insight: null },
+      { id: "hl:comebackArtist", heading: "Welcome back, Surfaces", insight: null, highlight: COMEBACK_ARTIST },
+      { id: "week", heading: "Your week", insight: "**Friday** was the big one." },
+      { id: "topArtists", heading: "Top artists", insight: "ignored: no insight slot" },
+      { id: "alsoOnRepeat", heading: "Also on repeat", insight: null },
+    ],
   };
 }
