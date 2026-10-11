@@ -2,12 +2,14 @@
 // activity. Pure rendering from a HomeView (src/dashboard/index.ts gathers it), so it is easy to test
 // and to screenshot.
 
+import { isLoginError } from "../alerts";
 import type { Session } from "../auth";
 import { MAX_CALLS_PER_MONTH } from "../editor";
 import { esc, fmt, plays, playlistUrl } from "../email/layout";
 import type { WriteMode } from "../env";
 import { inHolidaySeason } from "../jobs/holiday-playlist";
 import { PLACEHOLDER_PREFIX } from "../jobs/owned-playlists";
+import { jobLabel } from "../runtime";
 import type { SettingValues } from "../settings";
 import { zonedDate } from "../utils/time";
 import { ago, localTime, ui } from "./layout";
@@ -27,28 +29,14 @@ export interface HomeView {
   email: { configured: boolean; to: string | null };
   /** OPENAI_API_KEY is set (the AI editor setting is visible). */
   aiAvailable: boolean;
-  /** Playlist ids from legacy deploy vars, which win over `state`. */
-  envPlaylistIds: Partial<Record<OwnedPlaylistKey, string>>;
   /** The import card's HTML; empty when import isn't set up. */
   importHtml: string;
 }
-
-export const isLoginError = (message: string | null): boolean => !!message && /invalid_grant|refresh token|No refresh token/i.test(message);
 
 /** A list row: text on the left, a status pill on the right, actions (buttons) under the text. */
 const row = (mainHtml: string, sideHtml = "", actionsHtml = "") =>
   `<li><div class="main">${mainHtml}${actionsHtml ? `<div class="row-actions">${actionsHtml}</div>` : ""}</div>${sideHtml ? `<div class="side">${sideHtml}</div>` : ""}</li>`;
 
-/** Job names as the owner reads them (the alert state uses the cron job ids). */
-const JOB_LABEL: Record<string, string> = {
-  sync: "Sync",
-  "artist-playlists": "Artist playlists",
-  "hindi-favorites": "Hindi Favorites",
-  "history-playlists": "On This Day and Forgotten Favorites",
-  "holiday-playlist": "Holiday Favorites",
-  "weekly-digest": "Weekly digest",
-  "monthly-recap": "Monthly recap",
-};
 
 // ---------------------------------------------------------------------------- Spotify
 
@@ -64,7 +52,7 @@ function spotifyCard(v: HomeView): string {
     pill = ui.pill("bad", "Not connected");
     lead = "Spotify isn't connected, so nothing is syncing.";
     primary = ui.linkButton("/login", "Connect Spotify", "primary");
-  } else if (sync && isLoginError(sync.lastError)) {
+  } else if (sync?.lastError && isLoginError(sync.lastError)) {
     pill = ui.pill("bad", "Disconnected");
     lead = "Spotify's login expired or was revoked, so new plays aren't being saved. Log in again to resume; only your account is accepted.";
     primary = ui.linkButton("/login", "Reconnect Spotify", "primary");
@@ -105,7 +93,7 @@ function problemsCard(failing: FailingJob[], now: number, tz: string, alerts: bo
     const since = f.since ? `Failing since ${localTime(f.since, tz)} (${ago(f.since, now)})` : "Failing";
     const runs = `${f.failures} failed run${f.failures === 1 ? "" : "s"}`;
     const error = f.lastError ? `<code class="error-text">${esc(f.lastError.slice(0, 500))}</code>` : "";
-    return row(`<h3>${esc(JOB_LABEL[f.job] ?? f.job)}</h3><span class="meta">${esc(since)} · ${esc(runs)}</span>${error}`);
+    return row(`<h3>${esc(jobLabel(f.job))}</h3><span class="meta">${esc(since)} · ${esc(runs)}</span>${error}`);
   });
   const lead = alerts ? "You get an email when a job fails and a note when it recovers." : "Problem alerts are off, so failures only show up here.";
   return ui.card("Problems", `<p class="lead">${esc(lead)}</p><ul class="rows">${items.join("")}</ul>`, {
@@ -177,11 +165,9 @@ const CREATED_WHEN: Record<OwnedPlaylistKey, string> = {
 
 function playlistRow(v: HomeView, key: OwnedPlaylistKey, name: string): string {
   const on = v.values[PLAYLIST_SETTING[key]] as boolean;
-  const fromEnv = v.envPlaylistIds[key];
-  const stored = v.status.playlistState[key];
-  const id = fromEnv ?? stored;
+  const id = v.status.playlistState[key];
   if (!on) return row(`<h3>${esc(name)}</h3><span class="meta">Off. Turn it on in Settings.</span>`, ui.pill("neutral", "Off"));
-  if (!fromEnv && stored === "off") {
+  if (id === "off") {
     return row(
       `<h3>${esc(name)}</h3><span class="meta">You deleted it in Spotify, so it's no longer updated.</span>`,
       ui.pill("warn", "Deleted"),

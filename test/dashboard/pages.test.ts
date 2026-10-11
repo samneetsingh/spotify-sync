@@ -138,7 +138,6 @@ describe("home page", () => {
     writeMode: "live",
     email: { configured: true, to: "you@example.com" },
     aiAvailable: false,
-    envPlaylistIds: {},
     importHtml: "",
     ...over,
   });

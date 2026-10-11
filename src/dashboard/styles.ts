@@ -146,7 +146,8 @@ input[type=number]:hover,select:hover{border-color:${C.mute}}
 .disc{order:-1;position:relative;width:200px;height:200px;margin:0 auto 24px}
 .disc img{position:relative;display:block;width:200px;height:200px}
 .disc-label{position:absolute;left:62.5px;top:55px;width:75px;height:75px;border-radius:50%;background:linear-gradient(150deg,#1ed760 0%,#19bd55 55%,#14a64b 100%)}
-main.narrow h1{${TY.display};margin:0 0 12px}
+main.narrow h1{${TY.display};margin:0 0 12px;text-wrap:balance}
+main.narrow .lead{text-wrap:balance}
 main.narrow .lead{margin:0 0 32px}
 main.narrow .note{margin-top:16px}
 main.narrow>.btn{align-self:center}

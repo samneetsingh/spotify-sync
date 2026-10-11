@@ -54,8 +54,8 @@ export async function sendPreview(form: FormData, env: Env, settings: EffectiveS
   if (kind !== "week" && kind !== "month") return statusPage(400, "Unknown preview", "Pick the weekly digest or the monthly recap.");
   const db = env.DB;
   const name = kind === "week" ? "weekly digest" : "monthly recap";
-  const cfg = loadConfig(env);
-  const email = emailConfig(env);
+  const cfg = loadConfig(env, settings.values);
+  const email = emailConfig(env, settings.values);
   const live = cfg.writeMode === "live";
   if (live && !(email.binding && email.from && email.to)) return back("email-off", false);
 
@@ -65,7 +65,7 @@ export async function sendPreview(form: FormData, env: Env, settings: EffectiveS
 
   try {
     const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, db, cfg.writeMode);
-    const result = await previewDigest(kind, cfg, db, sp, email, now, editorConfig(env));
+    const result = await previewDigest(kind, cfg, db, sp, email, now, editorConfig(env, settings.values));
     if (!result) {
       await quietly("activity", () => logActivity(db, "email", `Preview of the ${name}: no plays to show`));
       return back(`preview-empty-${kind}`, false);

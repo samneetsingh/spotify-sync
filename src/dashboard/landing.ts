@@ -3,15 +3,12 @@
 // deploy is missing what the setup link needs ("Still being set up"). Shows no owner details.
 
 import { getOwner } from "../auth";
+import { canSendClaim } from "../auth/claim";
 import type { Env } from "../env";
 import { renderPage, ui, type Notice } from "./layout";
 
 /** The disc from the digest emails, with a green label: decorative. */
 const DISC = `<div class="disc" aria-hidden="true"><span class="disc-label"></span><img src="/email/vinyl.png?v=1" alt="" width="216" height="216"></div>`;
-
-/** What the claim email and its link need: email sending, a public URL and the Spotify app. */
-export const setupComplete = (env: Env): boolean =>
-  !!(env.ALERT_EMAIL && env.ALERT_FROM && env.ALERT_EMAIL_TO && env.PUBLIC_URL && env.SPOTIFY_CLIENT_ID && env.SPOTIFY_CLIENT_SECRET);
 
 export type LandingState = "owned" | "unclaimed" | "unconfigured";
 
@@ -41,7 +38,7 @@ ${ui.linkButton("/login", "Log in with Spotify", "primary")}
 /** The landing page for `env`; `notice` is a flash message (e.g. after logging out). */
 export async function renderLanding(env: Env, db: D1Database, notice?: Notice): Promise<Response> {
   const owner = await getOwner(db, env);
-  const state: LandingState = owner ? "owned" : setupComplete(env) ? "unclaimed" : "unconfigured";
+  const state: LandingState = owner ? "owned" : canSendClaim(env) ? "unclaimed" : "unconfigured";
   const { title, body } = landingBody(state);
   return renderPage({ title, session: null, body, notice, layout: "narrow" });
 }

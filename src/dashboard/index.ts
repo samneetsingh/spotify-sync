@@ -67,7 +67,7 @@ export function flashNotice(url: URL, env: Env): Notice | undefined {
 async function homePage(env: Env, session: Session, notice: Notice | undefined): Promise<Response> {
   const db = env.DB;
   const [settings, status] = await Promise.all([loadSettings(db, env), loadStatus(db)]);
-  const email = emailConfig(env);
+  const email = emailConfig(env, settings.values);
   let importHtml = "";
   if (importEnabled(env)) {
     try {
@@ -84,10 +84,6 @@ async function homePage(env: Env, session: Session, notice: Notice | undefined):
     writeMode: parseWriteMode(env.WRITE_MODE),
     email: { configured: !!(email.binding && email.from && email.to), to: email.to ?? null },
     aiAvailable: !!env.OPENAI_API_KEY,
-    envPlaylistIds: {
-      ...(env.SPOTIFY_FREQUENT_PLAYLIST_ID ? { frequent: env.SPOTIFY_FREQUENT_PLAYLIST_ID } : {}),
-      ...(env.SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID ? { hindi: env.SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID } : {}),
-    },
     importHtml,
   });
   return renderPage({ title: "Dashboard", session, nav: "home", body, notice, importEnabled: importEnabled(env) });
