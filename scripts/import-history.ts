@@ -5,6 +5,8 @@
  *
  * Usage: npm run import-history -- <export-dir> [--db <database name>] [--dry-run]
  * The database defaults to the production one in wrangler.generated.toml (or $WRANGLER_CONFIG).
+ * The dashboard's Import page does the same from the uploaded zip (src/import); both use the
+ * parser and diff in src/import/parse.ts and plan.ts, so they reconcile identically.
  *
  * The export is the source of truth for plays inside its span (first record to last record
  * + 30 s): afterwards D1's plays there equal the export's streams of at least 30 s. Missing
@@ -17,88 +19,21 @@
  * Safe to re-run: the diff is recomputed, so an interrupted run converges. Tracks are only
  * ever inserted (INSERT OR IGNORE), so history data never overwrites richer API metadata.
  *
- * Afterwards, to add newly imported tracks to Liked Songs and the frequent playlist,
- * run the Worker's /sync-full (see README).
+ * Imported tracks don't reach Liked Songs or the frequent playlist from here; the dashboard
+ * import offers that backfill.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXPORT_PLAY_FIELDS } from "../src/db/schema";
+import { ExportCollector, MIN_MS_PLAYED, isAudioHistoryFile, parseRecordsText, playKey, type ExportPlay, type ExportTrack } from "../src/import/parse";
+import { planReconcile, utcYear } from "../src/import/plan";
 import { genresJson, trackRows } from "../src/spotify/metadata";
 import type { SpotifyArtistFull, SpotifyTrack } from "../src/spotify/types";
 import { accessTokenFromD1, d1ExecFile, d1Rows, lit, schemaVersion, spotifyGet, targetDb } from "./lib";
 
 const ROWS_PER_STATEMENT = 200; // keeps each statement well under D1's 100 KB limit
 const ROWS_PER_FILE = 20_000;
-const MIN_MS_PLAYED = 30_000; // Spotify counts a stream at 30 s; recently-played (the live sync) only reports those
-const SPAN_TAIL_MS = 30_000; // covers the API's twin of the export's last play, which lands ~2 s after its ts
-
-type Rec = Record<string, unknown>;
-type ExportFields = Record<(typeof EXPORT_PLAY_FIELDS)[number][0], string | number | null> & { ms_played: number | null };
-interface Play { played_at_ms: number; track_id: string; track_uri: string; fields: ExportFields }
-interface Track { track_id: string; track_uri: string; name: string | null; artists: string | null; album: string | null; explicit: number | null }
-
-/** Port of _parse_record: needs a spotify:track URI and a timestamp; everything else is optional. */
-export function parseRecord(r: Rec): { play: Play; track: Track } | null {
-  const uri = [r.spotify_track_uri, r.track_uri, r.trackUri].find((u) => typeof u === "string" && u) as string | undefined;
-  if (!uri?.startsWith("spotify:track:")) return null;
-  const trackId = uri.split(":").pop()!;
-  const ts = (r.ts ?? r.endTime) as string | undefined;
-  if (!ts || typeof ts !== "string") return null;
-  const ms = parseTimestamp(ts);
-  if (ms === null) return null;
-  const flagKey = "explicit" in r ? "explicit" : "is_explicit" in r ? "is_explicit" : null;
-  const explicit = flagKey === null ? null : r[flagKey] === true ? 1 : r[flagKey] === false ? 0 : null;
-  const str = (...vals: unknown[]) => (vals.find((v) => typeof v === "string" && v) as string | undefined) ?? null;
-  const bool = (v: unknown) => (typeof v === "boolean" ? (v ? 1 : 0) : null);
-  const fields: ExportFields = {
-    ms_played: ([r.ms_played, r.msPlayed].find((v) => typeof v === "number") as number | undefined) ?? null,
-    platform: str(r.platform),
-    conn_country: str(r.conn_country),
-    reason_start: str(r.reason_start),
-    reason_end: str(r.reason_end),
-    shuffle: bool(r.shuffle),
-    skipped: bool(r.skipped),
-    offline: bool(r.offline),
-    incognito_mode: bool(r.incognito_mode),
-  };
-  return {
-    play: { played_at_ms: ms, track_id: trackId, track_uri: uri, fields },
-    track: {
-      track_id: trackId,
-      track_uri: uri,
-      name: str(r.master_metadata_track_name, r.trackName),
-      artists: str(r.master_metadata_album_artist_name, r.artistName),
-      album: str(r.master_metadata_album_album_name),
-      explicit,
-    },
-  };
-}
-
-/** ISO 8601 (extended export `ts`), or legacy "YYYY-MM-DD HH:MM" (`endTime`) treated as UTC. */
-export function parseTimestamp(ts: string): number | null {
-  const legacy = ts.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/);
-  const ms = legacy ? Date.UTC(+legacy[1]!, +legacy[2]! - 1, +legacy[3]!, +legacy[4]!, +legacy[5]!) : Date.parse(ts);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-/** JSON array, single object, or newline-delimited JSON. */
-export function loadRecords(path: string): Rec[] {
-  const text = readFileSync(path, "utf8").trim();
-  try {
-    const parsed = JSON.parse(text);
-    return (Array.isArray(parsed) ? parsed : [parsed]).filter((r) => r && typeof r === "object");
-  } catch {
-    return text.split("\n").flatMap((line) => {
-      try {
-        const r = JSON.parse(line);
-        return r && typeof r === "object" ? [r] : [];
-      } catch {
-        return [];
-      }
-    });
-  }
-}
 
 /** INSERT OR IGNORE, or an upsert when `onConflict` (an ON CONFLICT clause) is given. */
 function insertStatements(table: string, cols: string[], rows: unknown[][], onConflict?: string): string[] {
@@ -136,8 +71,6 @@ function writeChunks(dir: string, prefix: string, statements: string[], rowsPerS
 }
 
 const count = (db: string, sql: string) => Number(Object.values(d1Rows(db, sql)[0] ?? {})[0] ?? 0);
-const playKey = (ms: number, trackId: string) => `${ms}:${trackId}`;
-const year = (ms: number) => new Date(ms).getUTCFullYear();
 
 /**
  * Plays in D1 with from <= played_at_ms < to, keyed like `plays`, mapped to whether they
@@ -145,7 +78,7 @@ const year = (ms: number) => new Date(ms).getUTCFullYear();
  */
 function currentPlays(db: string, from: number, to: number): Map<string, boolean> {
   const out = new Map<string, boolean>();
-  for (let y = year(from); y <= year(to); y++) {
+  for (let y = utcYear(from); y <= utcYear(to); y++) {
     const [lo, hi] = [Math.max(from, Date.UTC(y, 0, 1)), Math.min(to, Date.UTC(y + 1, 0, 1))];
     const rows = d1Rows<{ played_at_ms: number; track_id: string; has_fields: number }>(
       db,
@@ -156,7 +89,7 @@ function currentPlays(db: string, from: number, to: number): Map<string, boolean
   return out;
 }
 
-function applyDiff(db: string, tracks: Map<string, Track>, toInsert: Play[], toUpdate: Play[], toDelete: Array<[number, string]>): void {
+function applyDiff(db: string, tracks: Map<string, ExportTrack>, toInsert: ExportPlay[], toUpdate: ExportPlay[], toDelete: Array<[number, string]>): void {
   const before = { plays: count(db, "SELECT COUNT(*) FROM plays"), tracks: count(db, "SELECT COUNT(*) FROM tracks") };
   const tmp = mkdtempSync(join(tmpdir(), "spotify-import-"));
   try {
@@ -234,65 +167,33 @@ async function main(): Promise<void> {
   const db = targetDb();
   const dryRun = process.argv.includes("--dry-run");
 
+  // A directory: its audio history files (Streaming_History_Audio_*.json, older endsong_*.json),
+  // in name order like the dashboard import; video history and other JSON files are ignored.
   const files = statSync(target).isDirectory()
-    ? readdirSync(target).filter((f) => f.toLowerCase().endsWith(".json")).sort().map((f) => join(target, f))
+    ? readdirSync(target).filter(isAudioHistoryFile).sort().map((f) => join(target, f))
     : [target];
-  if (!files.length) throw new Error(`No JSON files in ${target}`);
+  if (!files.length) throw new Error(`No Streaming_History_Audio_*.json (or endsong_*.json) files in ${target}`);
 
-  const plays = new Map<string, Play>();
-  const tracks = new Map<string, Track>();
-  let [seen, skipped, short] = [0, 0, 0];
-  let [first, last] = [Infinity, -Infinity];
-  for (const f of files) {
-    const records = loadRecords(f);
-    seen += records.length;
-    for (const r of records) {
-      const parsed = parseRecord(r);
-      if (!parsed) {
-        skipped++;
-        continue;
-      }
-      const { play, track } = parsed;
-      // The span covers every track record, so shorter streams inside it get deleted too.
-      [first, last] = [Math.min(first, play.played_at_ms), Math.max(last, play.played_at_ms)];
-      if ((play.fields.ms_played ?? 0) < MIN_MS_PLAYED) {
-        short++;
-        continue;
-      }
-      plays.set(playKey(play.played_at_ms, play.track_id), play);
-      if (!tracks.has(track.track_id)) tracks.set(track.track_id, track);
-    }
-  }
-  console.log(`${files.length} files, ${seen} records, ${skipped} skipped (no track URI or timestamp), ${short} under ${MIN_MS_PLAYED / 1000} s`);
-  if (first > last) return;
-  const [from, to] = [first, last + SPAN_TAIL_MS];
+  const collected = new ExportCollector();
+  for (const f of files) collected.add(parseRecordsText(readFileSync(f, "utf8")));
+  const { plays, tracks } = collected;
+  console.log(`${files.length} files, ${collected.seen} records, ${collected.skipped} skipped (no track URI or timestamp), ${collected.short} under ${MIN_MS_PLAYED / 1000} s`);
+  const span = collected.span();
+  if (!span) return;
+  const { from, to } = span;
   console.log(`Span ${new Date(from).toISOString()} .. ${new Date(to).toISOString()}: ${plays.size} plays, ${tracks.size} tracks`);
 
   const version = schemaVersion(db);
   if (version < 9) throw new Error(`${db} is at schema v${version}; run \`npm run token\` first (it applies the schema and stores the login the import needs)`);
   const current = currentPlays(db, from, to);
-  const toInsert = [...plays].filter(([k]) => !current.has(k)).map(([, p]) => p);
-  const toUpdate = [...plays].filter(([k]) => current.get(k) === false).map(([, p]) => p);
-  const toDelete = [...current.keys()].filter((k) => !plays.has(k)).map((k): [number, string] => {
-    const [ms, trackId] = k.split(":");
-    return [Number(ms), trackId!];
-  });
-  const byYear = new Map<number, [number, number, number]>();
-  const tally = (ms: number, i: 0 | 1 | 2) => {
-    const counts = byYear.get(year(ms)) ?? [0, 0, 0];
-    counts[i]++;
-    byYear.set(year(ms), counts);
-  };
-  for (const p of toInsert) tally(p.played_at_ms, 0);
-  for (const p of toUpdate) tally(p.played_at_ms, 1);
-  for (const [ms] of toDelete) tally(ms, 2);
+  const { toInsert, toUpdate, toDelete, byYear } = planReconcile(plays, current);
   console.log(`D1 has ${current.size} plays in the span; diff +${toInsert.length} / ~${toUpdate.length} / -${toDelete.length} (insert / add export fields / delete)`);
-  for (const [y, [ins, upd, del]] of [...byYear].sort(([a], [b]) => a - b)) console.log(`  ${y}: +${ins} / ~${upd} / -${del}`);
+  for (const [y, [ins, upd, del]] of byYear) console.log(`  ${y}: +${ins} / ~${upd} / -${del}`);
   if (dryRun) return;
 
   if (toInsert.length || toUpdate.length || toDelete.length) applyDiff(db, tracks, toInsert, toUpdate, toDelete);
   await enrich(db); // also on an empty diff, so a re-run finishes an enrichment that failed
-  console.log("Done. Next: run /sync-full to add new tracks to Liked Songs and the frequent playlist (see README).");
+  console.log("Done. (Liked Songs / Frequent Plays backfill: use the dashboard's Import page.)");
 }
 
 main().catch((err) => {
