@@ -57,7 +57,7 @@ TIME_ZONE = "{{TIME_ZONE}}"
 
 # Public origin (custom domain above): reconnect links and email images.
 PUBLIC_URL = "https://{{CUSTOM_DOMAIN}}"
-# The Spotify account (username) allowed to reconnect; the reconnect link refuses any other.
+# The Spotify username allowed to use reconnect links; they refuse any other account.
 SPOTIFY_USER_ID = "{{SPOTIFY_USER_ID}}"
 
 # Alerts and digests (src/alerts.ts) through Cloudflare Email Service. ALERT_FROM must be on a

@@ -1,4 +1,4 @@
-/** Compares SHA-256 digests so timing depends on neither input's content nor length (Amendment A3). */
+/** Compares SHA-256 digests so timing depends on neither input's content nor length (/sync-full auth). */
 export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [dA, dB] = await Promise.all([crypto.subtle.digest("SHA-256", enc.encode(a)), crypto.subtle.digest("SHA-256", enc.encode(b))]);

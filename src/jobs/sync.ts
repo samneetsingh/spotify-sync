@@ -1,6 +1,6 @@
 // Port of src/ingestion/sync_recent.py (sync_recent + sync_all_tracks).
 //
-// Write-mode gating (PLAN.md 3.2): the SpotifyClient blocks Spotify writes outside
+// Write-mode gating (README, "Write modes"): the SpotifyClient blocks Spotify writes outside
 // live mode; this module skips "state" writes (playlist_tracks, state) in dry_run.
 // Metadata (tracks, plays, track_artists, artists, sync_runs) is always written.
 

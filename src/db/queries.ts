@@ -268,7 +268,7 @@ export interface DiscoveredArtist {
 }
 
 /**
- * Rewrite of discover_artists.sql (PLAN.md 4.3.1): joins track_artists instead of
+ * Rewrite of the Python discover_artists.sql (docs/PORTING.md): joins track_artists instead of
  * splitting tracks.artists on ", ". Counts featured credits, keeps comma names whole.
  */
 export async function discoverArtists(
@@ -293,7 +293,7 @@ export async function discoverArtists(
 }
 
 /**
- * Rewrite of get_artist_tracks_over_threshold.sql (PLAN.md 4.3.2) for many artists at
+ * Rewrite of the Python get_artist_tracks_over_threshold.sql (docs/PORTING.md) for many artists at
  * once: exact track_artists match instead of LIKE '%name%'. Per-artist order is
  * play_count DESC, last_play DESC, as before.
  */

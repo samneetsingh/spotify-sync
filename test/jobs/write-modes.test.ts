@@ -1,4 +1,4 @@
-// Write-mode gating (PLAN.md 3.2), checked against every parity scenario:
+// Write-mode gating (README, "Write modes"), checked against every parity scenario:
 // shadow = live DB state with zero Spotify writes; dry_run = no Spotify writes and
 // no D1 state writes (playlist_tracks, state, playlists, playlist_removals,
 // playlist_exclusions). Metadata tables match live in both.

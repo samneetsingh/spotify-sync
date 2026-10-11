@@ -12,7 +12,7 @@ const testEnv = (overrides: Partial<Env> = {}): Env =>
   ({
     ...(env as unknown as Env),
     PUBLIC_URL: "https://sync.test",
-    SPOTIFY_USER_ID: "your-spotify-user",
+    SPOTIFY_USER_ID: "test-user",
     SPOTIFY_CLIENT_ID: "cid",
     SPOTIFY_CLIENT_SECRET: "csecret",
     ...overrides,
@@ -30,7 +30,7 @@ function mockSpotifyLogin(opts: { account?: string; tokenStatus?: number; refres
       const refresh = opts.refreshToken === undefined ? "new-refresh-token" : opts.refreshToken;
       return Response.json({ access_token: "access", token_type: "Bearer", expires_in: 3600, scope: "", ...(refresh ? { refresh_token: refresh } : {}) });
     }
-    if (url === "https://api.spotify.com/v1/me") return Response.json({ id: opts.account ?? "your-spotify-user", display_name: "Sam" });
+    if (url === "https://api.spotify.com/v1/me") return Response.json({ id: opts.account ?? "test-user", display_name: "Test User" });
     return new Response("unexpected", { status: 500 });
   }) as typeof fetch;
   return calls;

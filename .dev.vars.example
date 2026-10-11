@@ -3,5 +3,5 @@ SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 # Loopback redirect registered in the Spotify app, used by `npm run token`.
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-# Only for calling /sync-full; any long random string (also set with `wrangler secret put`).
+# Only for calling /sync-full: `openssl rand -hex 32` (also set with `wrangler secret put`).
 SYNC_FULL_SECRET=

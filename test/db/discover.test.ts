@@ -1,5 +1,5 @@
 // Intentional differences of the track_artists-based rewrite vs the recursive CTE
-// (PLAN.md 4.3.1), which split tracks.artists on ", ".
+// of the original Python service, which split tracks.artists on ", " (docs/PORTING.md).
 import { env } from "cloudflare:workers";
 import { beforeAll, expect, it } from "vitest";
 import { artistTracksOverThreshold, discoverArtists } from "../../src/db/queries";
