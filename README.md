@@ -1,19 +1,26 @@
 # spotify-sync
 
-A Cloudflare Worker that keeps your Spotify library tidy from your listening history:
+A Cloudflare Worker that keeps your Spotify library tidy from your listening history, with a small dashboard on your own domain:
 
-- **Every 10 minutes**: records recently played tracks in D1, adds new tracks to **Liked Songs**, and adds tracks with enough plays to a **frequent** playlist.
+- **Every 10 minutes**: records recently played tracks in D1, adds tracks with enough plays to a **Frequent Plays** playlist and, if you switch it on, adds every track you play to **Liked Songs**.
 - **03:00 UTC**: creates and fills **per-artist playlists** for artists you play a lot, respects tracks you remove, and stops managing playlists you delete.
-- **04:00 UTC**: fills a **Hindi/Desi favorites** playlist based on artist genres.
-- **08:05 UTC** (shortly after midnight US Pacific; see [Schedules](#schedules) to move it): rewrites two playlists from the whole history. **On This Day** holds each past year's most played tracks on today's date in `TIME_ZONE`, oldest year first. **Forgotten Favorites** is a new weekly set of 50 songs you've played 20+ times but not in over a year. Both are created on their first run. The same daily run also keeps **Holiday Favorites** filled from October 1 to January 6: every song whose title marks it as a holiday song (Christmas, Jingle, Let It Snow, ...) that you've played 3+ times. It only adds, so songs you remove stay removed. Every Monday it emails a **weekly digest** of the previous Monday-to-Sunday week, and on the first of each month a **monthly recap** of the previous month, to the alert address. Both show top tracks and artists with cover art, listening by day and hour, and new finds; the recap adds genres, a 12-month trend, comebacks and throwbacks. A failed send is retried the next day.
+- **04:00 UTC**: fills a **Hindi Favorites** playlist based on artist genres (off unless you switch it on).
+- **08:05 UTC** (shortly after midnight US Pacific; see [Schedules](#schedules) to move it): rewrites two playlists from the whole history. **On This Day** holds each past year's most played tracks on today's date in your time zone, oldest year first. **Forgotten Favorites** is a new weekly set of 50 songs you've played 20+ times but not in over a year. The same daily run also keeps **Holiday Favorites** filled from October 1 to January 6: every song whose title marks it as a holiday song (Christmas, Jingle, Let It Snow, ...) that you've played 3+ times. It only adds, so songs you remove stay removed. Every Monday it emails a **weekly digest** of the previous Monday-to-Sunday week, and on the first of each month a **monthly recap** of the previous month. Both show top tracks and artists with cover art, listening by day and hour, and new finds; the recap adds genres, a 12-month trend, comebacks and throwbacks. A failed send is retried the next day.
 
-All state lives in a D1 database (plays, tracks, artists, playlist contents). Playlists are built from that history, not from live API calls. Failures email you, with a one-click link to reconnect Spotify when the login expires.
+The Worker creates every playlist it manages the first time it needs it. All state lives in a D1 database (plays, tracks, artists, playlist contents, settings). Playlists are built from that history, not from live API calls.
+
+**The dashboard** (`https://<your domain>/`) is where the owner logs in with Spotify, switches features on and off, previews the digests, sees what ran and what failed, syncs on demand, and imports their full listening history from Spotify's privacy export. Failures email you; reconnecting an expired Spotify login is just logging in again.
 
 It began as a Python service on a home server and was ported to Workers + D1; [docs/PORTING.md](docs/PORTING.md) covers the decisions and lessons.
 
 ## Deploy your own
 
-You need a Cloudflare account on the **Workers Paid** plan (the free plan's CPU and subrequest limits are too small for the daily jobs, and it allows only 5 cron triggers per account; one instance uses 4), Node.js 22+, and a Spotify account. Optional: a domain on Cloudflare, for reconnect links, email images and alert emails.
+You need:
+
+- A Cloudflare account on the **Workers Paid** plan. The free plan's CPU and subrequest limits are too small for the daily jobs and the history import, and it allows only 5 cron triggers per account; one instance uses 4.
+- A domain in a zone on that account, for the dashboard and email links.
+- That domain (or another one on the account) onboarded to Cloudflare Email Service for sending, for the setup link, alerts and digests.
+- Node.js 22+ and a Spotify account.
 
 ### 1. Install
 
@@ -25,10 +32,11 @@ npx wrangler login
 
 ### 2. Create a Spotify app
 
-At [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), create an app with the **Web API** and add both redirect URIs:
+At [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard), create an app with the **Web API** and add one redirect URI:
 
-- `http://127.0.0.1:8888/callback`, used by `npm run token` (Spotify rejects `localhost`; use the loopback IP).
-- `https://<your domain>/reconnect/callback`, used by the reconnect links in alert emails (skip it without a custom domain).
+- `https://<your domain>/auth/callback`
+
+The setup link, logging in and reconnecting all use it. For local development you can also add `http://127.0.0.1:8788/auth/callback` (Spotify rejects `localhost`; use the loopback IP).
 
 While the app is in development mode, only Spotify accounts listed under **User Management** can log in (Spotify limits development-mode apps to a few users), so add yours. Copy the client ID and secret:
 
@@ -38,14 +46,16 @@ cp .dev.vars.example .dev.vars   # fill in SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_
 
 `.dev.vars` (gitignored) is read by `wrangler dev` and the scripts in `scripts/`.
 
-### 3. Create the databases
+### 3. Create the databases and the import bucket
 
 ```bash
 npx wrangler d1 create spotify-sync        # production
 npx wrangler d1 create spotify-sync-test   # used by `npm run dev` (dry run)
+npx wrangler r2 bucket create spotify-sync-imports
+npx wrangler r2 bucket lifecycle add spotify-sync-imports delete-imports imports/ --expire-days 7
 ```
 
-Note both database ids. If wrangler offers to add the binding to your config, decline: the template already has it.
+Note both database ids. If wrangler offers to add a binding to your config, decline: the template already has them. The bucket is named `<WORKER_NAME>-imports` and only holds uploaded exports for the minutes it takes to read them; the lifecycle rule deletes anything left behind after 7 days. Skip it if you set `"imports": false` (see [History import](#history-import)).
 
 ### 4. Write your deploy config
 
@@ -58,47 +68,62 @@ npm run configure                                  # writes wrangler.generated.t
 
 | Key | Required | Value |
 |---|---|---|
-| `WORKER_NAME` | yes | Worker name, e.g. `spotify-sync` |
+| `WORKER_NAME` | yes | Worker name, e.g. `spotify-sync`. The import bucket and Workflow are named after it. |
 | `D1_DATABASE_NAME`, `D1_DATABASE_ID` | yes | The production database from step 3 |
 | `TEST_WORKER_NAME`, `TEST_D1_DATABASE_NAME`, `TEST_D1_DATABASE_ID` | yes | Name for the local test Worker (`npm run dev`) and the test database |
-| `SPOTIFY_USER_ID` | yes | The Spotify username allowed to use reconnect links (yours: see your account overview on spotify.com); they refuse any other account |
-| `CUSTOM_DOMAIN` | yes* | Hostname the Worker is served on, e.g. `spotify-sync.example.com`, in a zone on your Cloudflare account |
-| `ALERT_FROM`, `ALERT_EMAIL_TO` | yes* | Sender (on a domain onboarded to Cloudflare Email Service) and recipient of alerts and digests |
-| `TIME_ZONE` | no, `UTC` | IANA zone for "today" (history playlists, holiday season, digest weeks, alert times) |
-| `SPOTIFY_FREQUENT_PLAYLIST_ID` | no | A playlist you created for frequently played tracks; empty = off |
-| `SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID` | no | A playlist you created for Hindi/Desi favorites; empty = off |
-| `SPOTIFY_ALL_PLAYLIST_ID` | no | Legacy: only namespaces the sync cursor key; leave empty |
-| `AI_EDITOR` | no, `off` | `on` or `off`: switch for the AI editor |
+| `CUSTOM_DOMAIN` | yes | Hostname the Worker is served on, e.g. `spotify-sync.example.com`, in a zone on your Cloudflare account |
+| `ALERT_FROM` | yes | Sender address, on a domain onboarded to Cloudflare Email Service |
+| `ALERT_EMAIL_TO` | yes | Your inbox: the setup link, alerts and digests go here, and only here |
+| `settings` | no | First-run defaults for the dashboard settings, e.g. `{"timeZone": "Europe/Berlin", "liked": true}` (see [Settings](#settings)) |
+| `imports` | no, `true` | `false` leaves out the R2 bucket and the Workflow and hides the Import page |
 
-\* No custom domain? Delete the `routes` and `PUBLIC_URL` lines from `wrangler.toml`: the jobs still run, but there are no reconnect links (use `npm run token` instead) and emails lose their record image. No email? Delete the `ALERT_FROM`/`ALERT_EMAIL_TO` lines and the `[[send_email]]` block: alerts and digests are then skipped (and logged). `configure` only asks for placeholders still in the template.
+`configure` turns these into the Worker's runtime vars:
 
-Playlist ids are the last part of the playlist's share link (`open.spotify.com/playlist/<id>`). Thresholds such as `FREQUENT_MIN_PLAYS` and the cron schedules live directly in `wrangler.toml`.
+| Var | Value |
+|---|---|
+| `WRITE_MODE` | `live` (see [Write modes](#write-modes)) |
+| `PUBLIC_URL` | `https://<CUSTOM_DOMAIN>`: the dashboard, its Spotify login, email links and images |
+| `ALERT_FROM`, `ALERT_EMAIL_TO` | As above. The `send_email` binding gets the same `ALERT_EMAIL_TO` as its only allowed destination, so the two can't diverge. |
+| `SETTINGS` | Your `settings` object as JSON |
+
+Everything you choose day to day (playlists, emails, time zone, AI editor) is a dashboard setting, and the Worker keeps its own ids (owner, playlists, sync cursor) in D1. No custom domain? Delete the `routes` and `PUBLIC_URL` lines from `wrangler.toml`: the crons still run (connect Spotify with `npm run token`), but there's no dashboard, no Spotify login and no email images.
 
 ### 5. Set the secrets
 
 ```bash
 npx wrangler secret put SPOTIFY_CLIENT_ID -c wrangler.generated.toml       # say yes to creating the Worker
 npx wrangler secret put SPOTIFY_CLIENT_SECRET -c wrangler.generated.toml
-openssl rand -hex 32   # optional SYNC_FULL_SECRET for POST /sync-full; also put it in .dev.vars
-npx wrangler secret put SYNC_FULL_SECRET -c wrangler.generated.toml
+npx wrangler secret put OPENAI_API_KEY -c wrangler.generated.toml          # optional: the AI editor
 ```
 
-### 6. Log in to Spotify, then deploy
+### 6. Deploy and claim it
 
 ```bash
-npm run token    # browser login; creates the schema and stores the refresh token in D1
 npm run deploy   # configure + wrangler deploy
 ```
 
-The first sync runs within 10 minutes and backfills the last 24 hours (Spotify's recently-played history only reaches back 50 plays). Check it in the dashboard (Workers Logs) or with `npx wrangler tail -c wrangler.generated.toml`. The refresh token lives in the D1 `state` table, not in a secret, so the Worker can save rotated tokens itself.
+The custom domain is created on deploy. Open `https://<your domain>`: it says **Almost ready**. Within 10 minutes the Worker emails `ALERT_EMAIL_TO` a setup link (check spam). Click **Connect Spotify** and log in: whoever completes the link with Spotify becomes the owner, so it goes only to the address you configured, works once, and expires after 7 days. The cron sends it at most 3 times; the landing page's **Resend** button sends another (once an hour, 5 a day).
+
+You land on **Settings** with a welcome banner and get a welcome email. Review the defaults; the first sync runs within 10 minutes and backfills the last 24 hours (Spotify's recently-played history only reaches back 50 plays). From then on, `https://<your domain>` shows **Log in with Spotify**, and only the owner's Spotify account can log in.
+
+The Spotify refresh token lives in the D1 `state` table, not in a secret, so the Worker can save rotated tokens itself. Watch the jobs in Workers Logs or with `npx wrangler tail -c wrangler.generated.toml`.
+
+**Without email**, delete the `ALERT_FROM` and `ALERT_EMAIL_TO` lines and the `[[send_email]]` block from `wrangler.toml` (`configure` then stops asking for them). Alerts and digests are skipped, and there's no setup link: the landing page says the developer still needs to finish setup. Pin yourself as the owner in D1, then use **Log in with Spotify**:
+
+```bash
+npx wrangler d1 execute <D1_DATABASE_NAME> --remote -c wrangler.generated.toml \
+  --command "INSERT INTO state(key, value) VALUES('owner:spotify_id', '<your Spotify username>')"
+```
+
+Your username is on your Spotify account overview. The tables are created by the Worker's first run (a cron or a page view), so open the domain once first.
+
+**Optional, from the command line:** `npm run token` runs the Spotify login on your machine and saves the refresh token to D1, so the jobs run without the dashboard (e.g. without a custom domain). It needs `SPOTIFY_REDIRECT_URI` (default `http://127.0.0.1:8888/callback`) registered in the Spotify app. It doesn't make anyone the owner: with email set up, the setup link still goes out.
 
 ### 7. Optional extras
 
-- **Your whole history.** Request your *Extended streaming history* from Spotify's privacy page, then `npm run import-history -- <export folder> --dry-run`, and again without `--dry-run`. Afterwards, `/sync-full` adds the imported tracks to Liked Songs (see [Maintenance](#maintenance)).
-- **Alert and digest emails.** Onboard your domain to Cloudflare Email Service so `ALERT_FROM` can send (`npx wrangler email sending enable <domain>` or the dashboard). The binding can only send to `ALERT_EMAIL_TO`; verify that address if Cloudflare asks you to.
-- **Custom domain.** Created on deploy from `CUSTOM_DOMAIN` (the hostname must be in a zone on the same account). `workers.dev` stays off.
-- **Frequent and Hindi/Desi playlists.** Create the playlists yourself in Spotify and put their ids in your deploy config.
-- **Holiday Favorites, On This Day, Forgotten Favorites** are created automatically. To switch one off, delete it in Spotify, or set its `state` row to `off` (see [Maintenance](#maintenance)).
+- **Your whole history.** Request your *Extended streaming history* from Spotify's privacy page, then upload it on the dashboard's Import page (see [History import](#history-import)).
+- **Email Service.** Onboard your sending domain with `npx wrangler email sending enable <domain>` or the dashboard. The binding can only send to `ALERT_EMAIL_TO`; verify that address if Cloudflare asks you to.
+- **Rate limiting.** A Cloudflare WAF rate-limiting rule on `/login`, `/claim` and `/auth/` (the free plan includes one rule per zone) limits login attempts per IP. The Worker already rate-limits the only unauthenticated action that sends email.
 
 ### Auto-deploy with Workers Builds
 
@@ -116,52 +141,112 @@ node -e 'console.log(JSON.stringify(require("./deploy.config.json")))'   # the D
 
 `configure` reads `DEPLOY_CONFIG` when there's no `--config` flag, and runs in the build command because Cloudflare documents build variables as available to the build (not at runtime) without saying whether the deploy command sees them; the generated file is still there when the deploy command runs. (If your deploy command does see them, `npm run deploy` works too.) Preview builds aren't useful here (preview URLs are off): turn them off, or append `-c wrangler.generated.toml` to the Preview command. Workers Builds deploys to the Worker it's connected to, so keep `WORKER_NAME` equal to that Worker's name. Runtime secrets are set once with `wrangler secret put`, not in the build.
 
+### Upgrading
+
+Instances deployed before the dashboard had more deploy config keys: `SPOTIFY_USER_ID`, `SPOTIFY_ALL_PLAYLIST_ID`, `SPOTIFY_FREQUENT_PLAYLIST_ID`, `SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID`, `TIME_ZONE`, `FREQUENT_MIN_PLAYS` and `AI_EDITOR`. The Worker now keeps these in D1: on its first run with them it copies them once (owner, playlist ids, and the settings that would otherwise change), so behaviour stays the same. The order matters:
+
+1. **Spotify app:** add the redirect URI `https://<your domain>/auth/callback`.
+2. **R2:** create the bucket `<WORKER_NAME>-imports` and its lifecycle rule (step 3 above) before deploying, or set `"imports": false`.
+3. **Deploy this version with your current deploy config, unchanged.** `configure` warns that it rendered the pre-dashboard keys as vars; that's expected.
+4. **Wait for the first cron** (within 10 minutes), then log in at `https://<your domain>` and check **Activity** for "Moved the deploy config's settings into the dashboard: ...". (`wrangler tail` shows `{"legacyConfig":"imported"}`.) Settings now shows your previous behaviour, marked **Changed here**.
+5. **Then remove those keys** from your deploy config (and paste the smaller `DEPLOY_CONFIG` into Workers Builds), and redeploy. Nothing changes.
+6. **Clean up:** remove the old `https://<your domain>/reconnect/callback` redirect URI and the `SYNC_FULL_SECRET` secret (`npx wrangler secret delete SYNC_FULL_SECRET -c wrangler.generated.toml`); `POST /sync-full` is gone. Old reconnect links in alert emails now open the login.
+
+Don't skip step 4. Without the copied values, the instance would look unclaimed (and email a setup link), fall back to UTC and the default settings, and create a second Frequent Plays playlist. Your history needs no migration, and Liked Songs stays on for instances that already have plays.
+
 ### Running more than one instance
 
-One fork can run several independent instances, say yours and a friend's, each with its own Worker, D1 databases, custom domain, Spotify account and alert address:
+One fork can run several independent instances, say yours and a friend's, each with its own Worker, D1 database, import bucket, custom domain, sender, Spotify account and inbox. One Spotify app and one Cloudflare account can serve them all. For each extra instance:
 
-- **A deploy config per instance**, e.g. `deploy.config.friend.json` (all `deploy.config*.json` files are gitignored), with different `WORKER_NAME`, database names and ids, `CUSTOM_DOMAIN`, `SPOTIFY_USER_ID` and alert addresses.
-- **Generate and use its own wrangler config:**
+1. **Spotify app:** add `https://<their domain>/auth/callback`. While the app is in development mode, add the email of their Spotify account under **User Management**.
+2. **Email:** onboard their domain to Email Service for sending, and give the instance its own sender on it (e.g. `spotify-sync@<their domain>`). Check the domain's sending DNS records (SPF, DKIM, DMARC) in the Email Service dashboard, and verify their inbox as a destination address if Cloudflare asks. Optional: an Email Routing rule forwarding the sender address to their inbox, so replies reach them.
+3. **D1 and R2:** `npx wrangler d1 create <name>`, then create `<name>-imports` and its lifecycle rule as in step 3. Bucket and Workflow names are unique per account, which is why they derive from `WORKER_NAME`.
+4. **A deploy config**, e.g. `deploy.config.friend.json` (all `deploy.config*.json` files are gitignored): their `WORKER_NAME`, database, `CUSTOM_DOMAIN`, `ALERT_FROM` (the new sender), `ALERT_EMAIL_TO` (their inbox), and `settings` for their defaults, e.g. `{"timeZone": "America/Los_Angeles"}`. The `TEST_*` keys can repeat yours. No Spotify ids are needed.
+5. **Secrets** on their Worker: the same `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`, and `OPENAI_API_KEY` if they get the AI editor.
+6. **Deploy**, either with its own Workers Builds project (same repository, build and deploy commands, their `DEPLOY_CONFIG`; non-production builds off), or locally:
 
-  ```bash
-  npm run configure -- --config deploy.config.friend.json --out wrangler.friend.generated.toml
-  npx wrangler deploy -c wrangler.friend.generated.toml
-  npx wrangler secret put SPOTIFY_CLIENT_ID -c wrangler.friend.generated.toml   # and the other secrets
-  WRANGLER_CONFIG=wrangler.friend.generated.toml npm run token -- --no-open
-  WRANGLER_CONFIG=wrangler.friend.generated.toml npm run import-history -- <their export> --dry-run
-  ```
+   ```bash
+   npm run configure -- --config deploy.config.friend.json --out wrangler.friend.generated.toml
+   npx wrangler secret put SPOTIFY_CLIENT_ID -c wrangler.friend.generated.toml   # and the other secrets
+   npx wrangler deploy -c wrangler.friend.generated.toml
+   ```
 
-  The scripts default `--db` to the production database of the config they use and print it before writing. `npm run token` stores whoever logs in, and its redirect only reaches your machine: open the printed URL in a private window and let the other person sign in there.
-- **A Workers Builds project per instance:** connect the same repository to each Worker, each with its own `DEPLOY_CONFIG` build variable and the same build and deploy commands.
-- **One Spotify app can serve every instance** (same client ID and secret as each Worker's secrets). Register each instance's `https://<its domain>/reconnect/callback` redirect URI, and while the app is in development mode add each person's Spotify account under **User Management**.
-- **Account limits:** each instance uses 4 cron triggers and one Worker; check the [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) for your plan (Workers Paid allows 250 cron triggers per account).
+   The scripts take the config from `WRANGLER_CONFIG` (e.g. `WRANGLER_CONFIG=wrangler.friend.generated.toml npm run import-history -- <export> --dry-run`), default `--db` to that config's production database, and print it before writing.
+7. **Check** that `https://<their domain>` says **Almost ready**; the setup email goes out at the next 10-minute cron. Tell them to expect it (and to check spam). Once they've connected, confirm their landing page shows **Log in with Spotify**.
+
+Each instance uses 4 cron triggers and one Worker; check the [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) for your plan (Workers Paid allows 250 cron triggers per account).
+
+## The dashboard
+
+| Page | What's there |
+|---|---|
+| Home | Spotify status and **Sync now**; problems (failing jobs with their last error); emails (next digest, **Send me a preview**, alerts, AI edits used); playlists, with **Recreate** for one you deleted in Spotify; the import; recent activity |
+| Settings | Every [setting](#settings) with where its value comes from; **Reconnect Spotify**, **Log out everywhere** |
+| Activity | Recent syncs, jobs, emails, logins and setting changes, and the latest Spotify changes |
+| Import | [History import](#history-import) |
+
+**Who can log in.** The owner is the Spotify account that completed the setup link, pinned in D1 (`state` `owner:spotify_id`). **Log in with Spotify** accepts only that account and saves its fresh refresh token, so logging in also reconnects an expired Spotify login. Sessions last 30 days; **Log out** ends this one, **Log out everywhere** all of them. To reset the owner, delete `owner:spotify_id` and the `sessions` rows in D1: the next cron emails a new setup link, and whoever completes it becomes the owner (until then the jobs keep using the old Spotify login).
+
+## Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `liked` | off | Add every track you play to Liked Songs. Turning it on asks for confirmation: existing likes are untouched, and turning it off later doesn't remove what it added. |
+| `frequent` | on | Frequent Plays playlist |
+| `frequentMinPlays` | 5 | Plays a song needs to join Frequent Plays (2-100) |
+| `artistPlaylists` | on | Per-artist playlists |
+| `hindiFavorites` | off | Hindi Favorites playlist |
+| `onThisDay`, `forgottenFavorites`, `holiday` | on | History and holiday playlists |
+| `alerts` | on | Failure, recovery and sync-gap emails |
+| `digestWeekly`, `digestMonthly` | on | Weekly digest, monthly recap |
+| `aiEditor` | off | The digests' [AI editor](#ai-editor-optional); shown only when `OPENAI_API_KEY` is set |
+| `timeZone` | `UTC` | When your day and week start: history playlists, the holiday season, digests, times in emails and on the dashboard |
+
+**Precedence**, per setting: a value changed on the dashboard, then the deploy config's `settings` (the `SETTINGS` var), then the default above. The dashboard stores only values that differ from the layer below, and **Reset** removes one, so a later change to the deploy config or the defaults applies again. An invalid value never breaks a job: it's skipped for the next layer and listed at the top of the Settings page. Jobs read the settings once per run; changes apply from the next run.
+
+## History import
+
+Spotify's recently-played API only reaches back 50 plays. For everything before, request **Extended streaming history** at spotify.com/account/privacy (it can take up to 30 days), then open **Import** on the dashboard:
+
+1. **Upload** the zip Spotify emails you (up to 300 MB), or the `Streaming_History_Audio_*.json` files inside it (up to 40). Keep the tab open while it uploads; that's the only part that needs it.
+2. The Worker reads it in the background and emails you when it's **ready to review**: per year, the plays it will add, complete (adding the export's details to plays it already has) and remove. It warns if the export looks like another account's, or would remove many previously imported plays.
+3. **Import** applies it month by month. Optionally it also backfills **Frequent Plays** (on by default) and **Liked Songs** (off by default, with the same confirmation as the setting). You get an email when it's done; the next nightly run builds artist playlists from the full history.
+
+Inside the export's span, plays become exactly its streams of 30 seconds or more: missing ones are inserted, shorter ones and the live sync's less precise copies are removed, and plays after the span are untouched. The same rules as `npm run import-history` (both use `src/import/parse.ts` and `plan.ts`).
+
+**What it needs:**
+
+- **The R2 bucket** `<WORKER_NAME>-imports` with its lifecycle rule (prefix `imports/`, delete after 7 days). Uploads are deleted as soon as they're read, so the raw export (which includes IP addresses) stays there for minutes; the rule is the backstop. R2 also aborts unfinished multipart uploads after 7 days by default.
+- **Workflows**: the `ImportWorkflow` class, deployed with the Worker as `<WORKER_NAME>-import`. Nothing to create.
+- **Workers Paid**, which the project needs anyway: a full import is a couple of hundred Workflow steps, some needing several seconds of CPU.
+
+Cost on Workers Paid is effectively zero (minutes of R2 storage, a few hundred Workflow steps, and a few million D1 rows written, inside the included 50 million). `"imports": false` in the deploy config leaves out the bucket and the Workflow and hides the Import page; `npm run import-history` still works from the command line.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `npm test` | Unit, parity and write-mode tests (local simulated D1, mocked Spotify; the template is filled with the example config) |
+| `npm test` | Unit, parity and write-mode tests (local simulated D1, R2 and Workflows, mocked Spotify; the template is filled with the example config) |
 | `npm run typecheck` | Type-checks the Worker and the scripts |
 | `npm run configure` | Writes `wrangler.generated.toml` from `deploy.config.json` (or `DEPLOY_CONFIG`; `-- --config <file> --out <file>` for another instance) |
-| `npm run dev` | Runs the Worker locally in `dry_run` against the **test** D1; trigger a job with `curl "http://localhost:8787/__scheduled?cron=*/10+*+*+*+*"` |
+| `npm run dev` | Runs the Worker locally in `dry_run` against the **test** D1 (R2, Workflows and email simulated). Trigger a job with `curl "http://localhost:8787/__scheduled?cron=*/10+*+*+*+*"`. For the dashboard: `npm run dev -- --port 8788 --var PUBLIC_URL:http://127.0.0.1:8788` |
 | `npm run deploy` | Configures and deploys to production (or let Workers Builds do it on push) |
-| `npm run token` | Spotify login; creates the schema if needed and writes the refresh token to D1 (`-- --db <name>` for another database) |
-| `npm run import-history -- <dir>` | Reconciles D1 with a Spotify privacy export (Extended Streaming History JSON): inside the export's span, plays become exactly its streams of 30 s or more (missing ones inserted, skips and API duplicates deleted); later plays are untouched. Then fetches artist credits and metadata. Pass the whole export folder; `--dry-run` prints the per-year diff without writing. |
+| `npm run token` | Optional: Spotify login from the command line; creates the schema if needed and writes the refresh token to D1 (`-- --db <name>` for another database) |
+| `npm run import-history -- <dir>` | The history import from the command line: reconciles D1 with the export's JSON files in `<dir>` (pass the whole folder), then fetches artist credits and metadata. `--dry-run` prints the per-year diff without writing. |
 | `npm run live-write-test` | Creates, fills, replaces and deletes a throwaway playlist to check real Spotify writes |
 
 The scripts use `wrangler.generated.toml`, or the file in `WRANGLER_CONFIG`. For other wrangler commands, pass `-c wrangler.generated.toml` yourself.
 
 ## Configuration
 
-Non-secret settings are Worker vars in `wrangler.toml` (thresholds, schedules, bindings) and your deploy config (everything per deployment). Secrets, set with `npx wrangler secret put <NAME> -c wrangler.generated.toml` and locally in `.dev.vars`:
+Runtime vars come from your deploy config (see [step 4](#4-write-your-deploy-config)); bindings, crons and the template's structure live in `wrangler.toml`. Secrets, set with `npx wrangler secret put <NAME> -c wrangler.generated.toml` and locally in `.dev.vars`:
 
 - `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`
-- `SYNC_FULL_SECRET` (only needed for `/sync-full`)
 - `OPENAI_API_KEY` (optional, for the [AI editor](#ai-editor-optional))
 
 ### Write modes
 
-`WRITE_MODE` in `wrangler.toml`:
+`WRITE_MODE` (`live` in production, `dry_run` in the test environment):
 
 | Mode | Spotify writes | D1 state writes |
 |---|---|---|
@@ -169,24 +254,24 @@ Non-secret settings are Worker vars in `wrangler.toml` (thresholds, schedules, b
 | `shadow` | no | yes |
 | `dry_run` | no | no |
 
-In every mode the Worker still records plays and track metadata, and every Spotify write (or would-be write) is logged in the `worker_actions` table. Keep `dry_run` runs short: the sync cursor doesn't advance, and recently-played only returns the last 50 plays.
+In every mode the Worker still records plays and track metadata, and every Spotify write (or would-be write) is logged in the `worker_actions` table. Digests and previews are only sent in `live`; other modes log them. Keep `dry_run` runs short: the sync cursor doesn't advance, and recently-played only returns the last 50 plays.
 
 ### Schedules
 
-Cron schedules are in UTC, in `wrangler.toml` `[triggers]`. `src/index.ts` maps each exact cron string to its job, so **change both together**. Cron changes take a few minutes (up to about 30) to propagate; don't redeploy repeatedly while waiting.
+Cron schedules are in UTC, in `wrangler.toml` `[triggers]`. `src/schedule.ts` maps each exact cron string to its jobs, so **change both together**. Cron changes take a few minutes (up to about 30) to propagate; don't redeploy repeatedly while waiting.
 
 ## Alerts
 
-Failures email `ALERT_EMAIL_TO` through Cloudflare Email Service:
+With the `alerts` setting on, failures email `ALERT_EMAIL_TO` through Cloudflare Email Service:
 
-- **A job throws:** you get an immediate alert, a reminder every 6 hours while it keeps failing, and a note when it recovers.
+- **A job throws:** you get an immediate alert, a reminder every 6 hours while it keeps failing, and a note when it recovers. The dashboard shows the failing job and its last error.
 - **Syncs stop for more than 45 minutes:** you get a "sync resumed after a gap" email on the first run afterwards. While crons aren't firing at all, nothing can send mail; the gap email arrives once they resume.
 
-An expired Spotify login shows up as a failing sync. Its email has a **Reconnect Spotify** button: it opens Spotify's login and brings you back to the Worker, which saves the new refresh token and syncs right away (you then get the "recovered" email). The link works once, expires after 7 days, and only accepts the account in `SPOTIFY_USER_ID`; reminders reuse it. It needs a custom domain and the `https://<your domain>/reconnect/callback` redirect URI in the Spotify app. `npm run token` always works as the fallback.
+An expired Spotify login shows up as a failing sync. Its email has a **Reconnect Spotify** button that opens the dashboard's Spotify login: logging in saves the new refresh token and, while the sync is failing, syncs right away (you then get the "recovered" email).
 
 ## Emails
 
-All emails (digests and alerts) are built from one small component library in `src/email/` (dark theme, tables and inline styles so Gmail and Apple Mail render them the same; phone layout first, upgraded on wide screens). Keep each email under ~100 KB, since Gmail clips longer ones. A dry run logs the subject, text and full HTML of a digest without sending it: `npm run dev -- --port 8788 --var PUBLIC_URL:http://localhost:8788`, then `curl "http://localhost:8788/__scheduled?cron=5+8+*+*+*"`. The vinyl record image is `public/email/vinyl.png` (source and re-render command in `scripts/vinyl.html`).
+All emails (digests, alerts, the setup and welcome emails, import updates) are built from one small component library in `src/email/` (dark theme, tables and inline styles so Gmail and Apple Mail render them the same; phone layout first, upgraded on wide screens). Keep each email under ~100 KB, since Gmail clips longer ones. **Send me a preview** on the dashboard sends last week's digest or last month's recap marked "[Preview]" without affecting the real ones. A dry run logs the subject, text and full HTML instead of sending: `npm run dev -- --port 8788 --var PUBLIC_URL:http://127.0.0.1:8788`, then `curl "http://127.0.0.1:8788/__scheduled?cron=5+8+*+*+*"`. Locally, `wrangler dev` writes every email it would send to a file under `.wrangler/tmp/email/` and logs the path. The vinyl record image is `public/email/vinyl.png` (source and re-render command in `scripts/vinyl.html`).
 
 ## AI editor (optional)
 
@@ -194,37 +279,23 @@ The digests can have an AI editor. Once per digest it makes one call to OpenAI (
 
 Code computes every number, chart and card; the model only sees precomputed facts. Its plan is validated strictly: every number in its copy must appear in the input, no markup, links or emoji, length limits, every chart with data present. Anything wrong (API error, timeout, refusal, invalid plan, or an edited email over 100,000 bytes) sends the default email instead; the editor never fails the job. Each digest logs `{ job, editor: used | fallback | off, reason, model, ms, inputTokens, outputTokens, theme, sections }` plus the plan, so a fallback reason such as `number: lead 1,600` shows what to tune.
 
-**Turning it on.** It runs only when both are set:
-
-- `AI_EDITOR = "on"` in `wrangler.toml` `[vars]` (unset or anything else keeps it off; forks can leave it off).
-- The `OPENAI_API_KEY` secret: `npx wrangler secret put OPENAI_API_KEY`. Use a service-account key from a dedicated OpenAI project with a monthly budget. Locally it goes in `.dev.vars`; the test environment leaves `AI_EDITOR` unset, so preview it with `--var AI_EDITOR:on` on the dry-run command above.
+**Turning it on.** Set the `OPENAI_API_KEY` secret (`npx wrangler secret put OPENAI_API_KEY -c wrangler.generated.toml`); the Settings page then shows **AI editor for digests**. Without the key the setting is hidden and off. Use a service-account key from a dedicated OpenAI project with a monthly budget. Locally the key goes in `.dev.vars`, and the setting follows the test database's settings (off until you switch it on in the local dashboard).
 
 **What goes to OpenAI:** the digest's facts: the period, totals, top track and artist names with play counts, genres, the busiest day and peak hour, new and returning artists, throwbacks, the highlight cards' facts (with the Spotify ids of their songs or artists), the section catalog and the default copy. Nothing else from D1, and no tokens or email addresses. Requests set `store: false`, so OpenAI doesn't keep the response for later retrieval (its standard API data policy still applies).
 
 **Switches and cost.**
 
-- Kill switch, no deploy needed: `npx wrangler d1 execute spotify-sync --remote --command "INSERT INTO state(key,value) VALUES('editor:mode','off') ON CONFLICT(key) DO UPDATE SET value='off'"`. Delete the row to turn it back on.
-- Monthly cap: `state` `editor:calls:<UTC YYYY-MM>` counts calls (before each call, dry runs included); at 10 the digests use the default layout until the next month.
+- Kill switch, no deploy needed: `npx wrangler d1 execute <D1_DATABASE_NAME> --remote -c wrangler.generated.toml --command "INSERT INTO state(key,value) VALUES('editor:mode','off') ON CONFLICT(key) DO UPDATE SET value='off'"`. Delete the row to turn it back on.
+- Monthly cap: `state` `editor:calls:<UTC YYYY-MM>` counts calls (before each call, dry runs and previews included); at 10 the digests use the default layout until the next month. The dashboard shows how many are used.
 - Cost: about $0.01-0.04 per digest with `gpt-6.1-sol` ($2 in / $10 out per million tokens; the first real runs used 2-3k input and 0.5-0.8k output tokens, about $0.01 each), so at most about $0.25 a month for 4-5 weekly digests and one recap; the cap bounds it at about $0.40.
 
 **Seasonal themes** don't need the AI: a digest whose last day falls in a season gets its colours and hero greeting (Halloween Oct 15 to Nov 1, winter holidays in December, new year in January, summer Jun 21 to Aug 31); other periods stay Spotify green. With the editor on, it picks between the default and that period's seasonal theme. All themes pass the contrast checks in `src/email/themes.ts`.
 
 ## Maintenance
 
-**Backfilling Liked Songs after an import (`/sync-full`).** The endpoint adds every track in D1 that isn't yet in Liked Songs (and qualifying frequent tracks). It is served on the custom domain (`curl -X POST https://<your domain>/sync-full -H "Authorization: Bearer $SECRET"`, needs the `SYNC_FULL_SECRET` secret set), or run it on Cloudflare's edge against production:
+**Playlists the Worker created.** Their ids live in the D1 `state` table (`playlist:frequent`, `playlist:hindi`, `playlist:on_this_day`, `playlist:forgotten_favorites`, `playlist:holiday`). Deleting one in Spotify switches it off (the daily runs notice it's gone); the dashboard then offers **Recreate**, which makes the next run create a fresh one. To stop one without deleting it, switch its setting off.
 
-```bash
-npx wrangler dev --remote -c wrangler.generated.toml   # uses production bindings and .dev.vars
-curl -X POST http://localhost:8787/sync-full \
-  -H "Authorization: Bearer $(grep '^SYNC_FULL_SECRET=' .dev.vars | cut -d= -f2-)"
-```
-
-**History and holiday playlists.** Their ids live in the D1 `state` table (`playlist:on_this_day`, `playlist:forgotten_favorites`, `playlist:holiday`). Deleting a playlist on Spotify switches it off; so does setting its value to `off`. Deleting the row makes the next run create a fresh one. For example:
-
-```bash
-npx wrangler d1 execute <D1_DATABASE_NAME> --remote -c wrangler.generated.toml \
-  --command "INSERT INTO state(key, value) VALUES('playlist:holiday', 'off') ON CONFLICT(key) DO UPDATE SET value = 'off'"
-```
+**Liked Songs and Frequent Plays for old plays.** The history import's options backfill both from your whole history.
 
 The export's per-play fields (`ms_played`, `reason_end`, `shuffle`, `skipped`, `platform`, `conn_country`, ...) are on `plays` for imported rows; API plays leave them NULL.
 
@@ -250,16 +321,24 @@ scripts/verify-counts.sh data/restored.db <D1_DATABASE_NAME>   # must exit 0
 
 ```
 src/
-  index.ts            cron dispatcher, /sync-full and the reconnect routes; runs each job with alerts + D1 query count logging
+  index.ts            entry: scheduled() -> schedule.ts; fetch() -> Origin check, auth, import, dashboard, 404
+  schedule.ts         cron -> jobs, the setup-email/connected gate, housekeeping
+  runtime.ts          withJob (migrations, settings, alerts, activity, D1 query count), email configs, legacy config import
+  settings.ts         the settings registry, precedence, load/save
+  auth/               owner, setup link (claim), Spotify login (one OAuth callback), sessions
+  dashboard/          server-rendered pages (landing, home, settings, activity), actions, styles
+  import/             history import: upload routes, zip reader, parser, staging, review, apply, Workflow, emails
+  http.ts             security headers, CSP nonce, cookies, CSRF (Origin) check
+  activity.ts         the dashboard's activity log
   alerts.ts           failure / recovery / sync-gap emails
-  reconnect.ts        one-click Spotify reconnect (single-use link -> Spotify login -> new refresh token)
+  emails/             account emails (setup link, welcome)
   email/              email design system: tokens + shell (layout.ts), blocks and charts (components.ts), themes, the digest's section registry
   editor/             optional AI editor for the digests: facts, highlights, prompt, plan validation, OpenAI client
-  config.ts, env.ts   typed config from wrangler vars and secrets
+  config.ts, env.ts   typed config from vars, secrets and settings
   jobs/               sync, artist-playlists, hindi-favorites, history-playlists, holiday-playlist, digest (weekly + monthly), owned-playlists, playlist-cache backfill
   db/                 schema migrations, bulk json_each queries, state, query counter
   spotify/            fetch-based client (token refresh, retries, write gating), types, parsers
-public/               static files served on the custom domain (email images)
+public/               static files served before the Worker: email images, import.js (the uploader), robots.txt
 scripts/              configure (deploy config -> wrangler config), token, import-history, live-write-test, verify-counts
 test/                 vitest (@cloudflare/vitest-plugin); parity/ holds frozen fixtures
 docs/PORTING.md       how this was ported from the original Python/Docker service

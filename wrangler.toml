@@ -84,7 +84,8 @@ class_name = "ImportWorkflow"
 # Secrets (`npx wrangler secret put <NAME> -c wrangler.generated.toml`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET
 #   OPENAI_API_KEY (optional: lets the owner turn on the digests' AI editor in Settings)
-# The Spotify app must list https://<CUSTOM_DOMAIN>/auth/callback as a redirect URI.
+# Spotify app: its one redirect URI for this instance is https://<CUSTOM_DOMAIN>/auth/callback
+# (setup link, login, and reconnecting after an expired login all use it).
 
 [observability]
 enabled = true
@@ -131,7 +132,8 @@ SETTINGS = '{{SETTINGS}}'
 # {{LEGACY_TEST_VARS}}
 # PUBLIC_URL unset: no dashboard (it refuses every POST), login links or email images. For the
 # dashboard, pass --port 8788 --var PUBLIC_URL:http://127.0.0.1:8788 (cookies drop __Host-/Secure
-# on http://). For a dry-run preview with the vinyl image, pass
+# on http://); logging in also needs http://127.0.0.1:8788/auth/callback as a redirect URI in the
+# Spotify app (it rejects "localhost"). For a dry-run preview with the vinyl image, pass
 #   --var PUBLIC_URL:https://<CUSTOM_DOMAIN>
 # The AI editor follows the test D1's settings: off unless switched on in the local dashboard's
 # Settings (shown when .dev.vars has OPENAI_API_KEY).

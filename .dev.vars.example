@@ -1,7 +1,8 @@
 # Local secrets for `wrangler dev` and the scripts in scripts/. Copy to .dev.vars (gitignored).
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
-# Loopback redirect registered in the Spotify app, used by `npm run token`.
+# Optional, only for `npm run token` (log in from the command line instead of the dashboard): a
+# loopback redirect registered in the Spotify app. Spotify rejects "localhost"; use 127.0.0.1.
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-# Optional: the digests' AI editor (also needs AI_EDITOR = "on"). Keep blank to leave it off.
+# Optional: lets the owner turn on the digests' AI editor in Settings. Keep blank to leave it off.
 OPENAI_API_KEY=
