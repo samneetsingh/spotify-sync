@@ -25,12 +25,19 @@ export function contentSecurityPolicy(nonce: string): string {
   ].join("; ");
 }
 
-/** Headers on every HTML response. no-referrer keeps OAuth codes and claim nonces out of Referer. */
+/**
+ * The Referrer-Policy on every response. `same-origin`: no Referer to other sites, so OAuth codes and
+ * setup links never leak. Not `no-referrer`: with it, browsers send `Origin: null` on same-origin
+ * POSTs and fetches (Fetch spec, "serializing a request origin"), which checkOrigin must refuse.
+ */
+export const REFERRER_POLICY = "same-origin";
+
+/** Headers on every HTML response. */
 export function securityHeaders(nonce: string): Record<string, string> {
   return {
     "Content-Type": "text/html; charset=utf-8",
     "Content-Security-Policy": contentSecurityPolicy(nonce),
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": REFERRER_POLICY,
     "X-Content-Type-Options": "nosniff",
     "X-Robots-Tag": "noindex",
     "Cache-Control": "no-store",
@@ -52,7 +59,7 @@ export function redirect(location: string, status: 302 | 303 = 303, headers?: He
   const h = new Headers(headers);
   h.set("Location", location);
   h.set("Cache-Control", "no-store");
-  h.set("Referrer-Policy", "no-referrer");
+  h.set("Referrer-Policy", REFERRER_POLICY);
   return new Response(null, { status, headers: h });
 }
 
@@ -93,8 +100,9 @@ export function authRequired(request: Request): Response {
 
 /**
  * CSRF check for every request that isn't GET or HEAD: `Origin` must equal PUBLIC_URL's origin
- * (which also rejects sibling subdomains that SameSite treats as same-site). Without an Origin
- * header, `Sec-Fetch-Site: same-origin` is accepted. Fails closed when PUBLIC_URL is unset or invalid.
+ * (which also rejects sibling subdomains that SameSite treats as same-site). Without a usable Origin
+ * (absent, or `null` as browsers send under some referrer policies), `Sec-Fetch-Site: same-origin`
+ * is accepted; browsers set it and pages can't. Fails closed when PUBLIC_URL is unset or invalid.
  */
 export function checkOrigin(request: Request, publicUrl: string | undefined): boolean {
   let expected: string;
@@ -104,7 +112,7 @@ export function checkOrigin(request: Request, publicUrl: string | undefined): bo
     return false;
   }
   const origin = request.headers.get("Origin");
-  if (origin !== null) return origin === expected;
+  if (origin !== null && origin !== "null") return origin === expected;
   return request.headers.get("Sec-Fetch-Site") === "same-origin";
 }
 

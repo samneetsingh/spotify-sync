@@ -25,7 +25,7 @@ describe("html responses", () => {
     expect(res.headers.get("Content-Security-Policy")).toBe(
       "default-src 'none'; style-src 'nonce-abc123'; script-src 'self'; img-src 'self' https://i.scdn.co data:; connect-src 'self'; form-action 'self' https://accounts.spotify.com; frame-ancestors 'none'; base-uri 'none'",
     );
-    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(res.headers.get("Cache-Control")).toBe("no-store"); // security headers win
     expect(res.headers.get("Set-Cookie")).toBe("a=b");
@@ -71,6 +71,8 @@ describe("checkOrigin", () => {
     expect(checkOrigin(req({ Origin: PROD }), PROD)).toBe(true);
     expect(checkOrigin(req({ Origin: PROD }), `${PROD}/`)).toBe(true);
     expect(checkOrigin(req({ "Sec-Fetch-Site": "same-origin" }), PROD)).toBe(true);
+    // `Origin: null` (what browsers send under Referrer-Policy: no-referrer) falls back to Sec-Fetch-Site.
+    expect(checkOrigin(req({ Origin: "null", "Sec-Fetch-Site": "same-origin" }), PROD)).toBe(true);
   });
 
   it("rejects other origins, sibling subdomains, http, missing headers and an unset PUBLIC_URL", () => {
@@ -78,6 +80,7 @@ describe("checkOrigin", () => {
     expect(checkOrigin(req({ Origin: "https://a.sync.test" }), PROD)).toBe(false);
     expect(checkOrigin(req({ Origin: "http://sync.test" }), PROD)).toBe(false);
     expect(checkOrigin(req({ Origin: "null" }), PROD)).toBe(false);
+    expect(checkOrigin(req({ Origin: "null", "Sec-Fetch-Site": "cross-site" }), PROD)).toBe(false);
     expect(checkOrigin(req({ Origin: "https://evil.test", "Sec-Fetch-Site": "same-origin" }), PROD)).toBe(false);
     expect(checkOrigin(req({ "Sec-Fetch-Site": "same-site" }), PROD)).toBe(false);
     expect(checkOrigin(req({}), PROD)).toBe(false);

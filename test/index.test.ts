@@ -21,7 +21,7 @@ describe("fetch router", () => {
     const res = await worker.fetch(request("/nope"), testEnv(), ctx);
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Security-Policy")).toMatch(/style-src 'nonce-[A-Za-z0-9+/=]+'/);
-    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
   });
 
   it("no longer serves POST /sync-full", async () => {

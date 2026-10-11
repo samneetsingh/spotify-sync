@@ -70,7 +70,7 @@ describe("GET /login", () => {
     const contents = decodeOAuthCookie(cookie.value);
     expect(contents).toMatchObject({ s: state, p: "login", n: "/settings" });
     expect(contents.e).toBe(NOW + 600_000);
-    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
 
     const after = await env.DB.prepare("SELECT COUNT(*) AS n FROM state").first<{ n: number }>();
     expect(after!.n).toBe(before!.n);

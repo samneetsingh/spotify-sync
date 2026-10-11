@@ -89,7 +89,7 @@ export async function expectSafePage(res: Response): Promise<string> {
   const csp = res.headers.get("Content-Security-Policy") ?? "";
   const nonce = csp.match(/style-src 'nonce-([^']+)'/)?.[1];
   expect(nonce).toBeTruthy();
-  expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+  expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
   expect(res.headers.get("Cache-Control")).toBe("no-store");
   const body = await res.text();
   const styles = body.match(/<style\b[^>]*>/g) ?? [];
