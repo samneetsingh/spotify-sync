@@ -76,6 +76,7 @@ export async function withJob<T>(env: Env, job: string, fn: Job<T>): Promise<T> 
     const result = await fn(config, db, sp);
     if (isDisabled(result)) {
       // Switched off: forget an old failure without a misleading "recovered" email.
+      console.log(JSON.stringify({ job, disabled: true }));
       await quietly("clear failure", () => clearFailure(db, job));
     } else {
       await quietly("record success", () => recordSuccess(db, alerts, job));
