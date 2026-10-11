@@ -1,19 +1,22 @@
 #!/bin/bash
 # Compare per-table row counts between a SQLite file and a remote D1 database
 # (rollback check: after loading a `wrangler d1 export` into a fresh SQLite file).
-# Usage: ./scripts/verify-counts.sh <sqlite.db> <d1-database-name>
-# Exits non-zero if any table differs.
+# Usage: ./scripts/verify-counts.sh <sqlite.db> <d1-database-name>   (from the repo root)
+# Uses $WRANGLER_CONFIG, else wrangler.generated.toml when present. Exits non-zero if any table differs.
 
 set -euo pipefail
 
 SQLITE="${1:?Usage: $0 <sqlite.db> <d1-database-name>}"
 D1="${2:?Usage: $0 <sqlite.db> <d1-database-name>}"
+CONFIG="${WRANGLER_CONFIG:-wrangler.generated.toml}"
+CONFIG_ARGS=()
+[ -f "$CONFIG" ] && CONFIG_ARGS=(-c "$CONFIG")
 TABLES="tracks plays artists track_artists playlists playlist_tracks playlist_removals playlist_exclusions sync_runs state"
 
 # One row of scalar subqueries: D1 caps the number of terms in a compound (UNION ALL) SELECT.
 QUERY="SELECT $(for T in $TABLES; do printf "(SELECT COUNT(*) FROM %s) AS %s, " "$T" "$T"; done | sed 's/, $//')"
 
-D1_COUNTS=$(npx wrangler d1 execute "$D1" --remote --json --command "$QUERY" 2>/dev/null \
+D1_COUNTS=$(npx wrangler d1 execute "$D1" --remote --json --command "$QUERY" ${CONFIG_ARGS[@]+"${CONFIG_ARGS[@]}"} 2>/dev/null \
   | node -e 'const r = JSON.parse(require("fs").readFileSync(0, "utf8"))[0].results[0]; for (const [k, v] of Object.entries(r)) console.log(k, v)')
 
 FAIL=0

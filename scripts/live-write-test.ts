@@ -5,14 +5,14 @@
  * write), verifies each step, then unfollows (deletes) it and checks it left the library
  * (how the history playlists notice a deletion).
  *
- * Usage: npm run live-write-test [-- --db spotify-sync]
+ * Usage: npm run live-write-test [-- --db <database name>]
  * Credentials from .dev.vars; refresh token read from (and rotations saved to) D1.
  */
 import { SpotifyClient } from "../src/spotify/client";
 import { fetchPlaylistTracks, followedPlaylistIds } from "../src/spotify/playlist";
-import { DEFAULT_DB, d1Rows, flag, requireVars, seedRefreshToken } from "./lib";
+import { d1Rows, requireVars, seedRefreshToken, targetDb } from "./lib";
 
-const db = flag("db", DEFAULT_DB);
+const db = targetDb();
 const env = requireVars("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET");
 
 // SpotifyClient only touches the D1 state table for the refresh token: read it from D1

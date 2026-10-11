@@ -1,90 +1,109 @@
-name = "spotify-sync"
+# TEMPLATE. Placeholders such as {{WORKER_NAME}} are filled from your deploy config by
+# `npm run configure`, which writes wrangler.generated.toml (gitignored). Every wrangler command
+# uses that file (`-c wrangler.generated.toml`; the npm scripts do this for you). Keys, defaults
+# and example values: deploy.config.example.json and the README ("Deploy your own"). Tests
+# render this template with the example values.
+
+# Worker name (lowercase letters, digits, dashes), e.g. spotify-sync. One per instance.
+name = "{{WORKER_NAME}}"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
 
 # ---------------------------------------------------------------------------
-# Production: `npx wrangler deploy`
+# Production: `npm run deploy`
 # ---------------------------------------------------------------------------
 
 # Crons fire internally. HTTP: POST /sync-full (secret-protected), the one-click Spotify
 # reconnect (/reconnect, /reconnect/callback; 404 without a valid single-use link) and the
-# static files in public/ (images used by the emails). workers.dev stays off (Amendment A3);
-# the Worker is reached only through its custom domain.
+# static files in public/ (images used by the emails). workers.dev stays off; the Worker is
+# reached only through its custom domain: CUSTOM_DOMAIN, a hostname in a zone on your
+# Cloudflare account (e.g. spotify-sync.example.com). No domain? Delete the `routes` line and
+# PUBLIC_URL below: the crons still run, you only lose reconnect links and email images.
 workers_dev = false
 preview_urls = false
-routes = [{ pattern = "spotify.example.com", custom_domain = true }]
+routes = [{ pattern = "{{CUSTOM_DOMAIN}}", custom_domain = true }]
 
 [assets]
 directory = "./public"
 
 [triggers]
-# UTC, same times the Python server used. Never delete this Worker with crons live:
-# set crons = [], deploy, wait ~15 min, then delete (see PLAN.md section 7).
+# UTC. src/index.ts maps each of these exact strings to its job: change both together.
+# Never delete this Worker with crons live: set crons = [], deploy, wait ~15 min, then delete.
 crons = ["*/10 * * * *", "0 3 * * *", "0 4 * * *", "5 8 * * *"]
 
 # Local `wrangler dev` and vitest use a local simulated DB for this binding;
 # only `wrangler deploy` reaches the real production database.
+# `npx wrangler d1 create <D1_DATABASE_NAME>` prints the id.
 [[d1_databases]]
 binding = "DB"
-database_name = "spotify-sync"
-database_id = "YOUR_D1_DATABASE_ID"
+database_name = "{{D1_DATABASE_NAME}}"
+database_id = "{{D1_DATABASE_ID}}"
 
 [vars]
-# Live since the 2026-10-09 cutover; the Python server is stopped.
+# live | shadow | dry_run (README, "Write modes").
 WRITE_MODE = "live"
-# Only the sync cursor key namespace; nothing is written to this playlist.
-SPOTIFY_ALL_PLAYLIST_ID = "YOUR_ALL_PLAYLIST_ID"
-SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
+# Legacy, optional: only the namespace of the sync cursor key (cursor_after_ms:<id>); nothing
+# is written to this playlist. Empty means "default". Deployments that set it keep their value
+# so the cursor key doesn't change.
+SPOTIFY_ALL_PLAYLIST_ID = "{{SPOTIFY_ALL_PLAYLIST_ID}}"
+# Optional: a playlist you created; tracks with FREQUENT_MIN_PLAYS+ plays are added. Empty = off.
+SPOTIFY_FREQUENT_PLAYLIST_ID = "{{SPOTIFY_FREQUENT_PLAYLIST_ID}}"
 FREQUENT_MIN_PLAYS = "5"
-SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
-# "Today" for the history playlists (On This Day, Forgotten Favorites).
-TIME_ZONE = "America/Los_Angeles"
+# Optional: a playlist you created for Hindi/Desi favorites (by artist genre). Empty = off.
+SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "{{SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID}}"
+# IANA zone for "today" (history playlists, holiday season, digests, alert times). Default UTC.
+TIME_ZONE = "{{TIME_ZONE}}"
 
 # Public origin (custom domain above): reconnect links and email images.
-PUBLIC_URL = "https://spotify.example.com"
-# The Spotify account this Worker syncs; the reconnect link refuses any other.
-SPOTIFY_USER_ID = "your-spotify-user"
+PUBLIC_URL = "https://{{CUSTOM_DOMAIN}}"
+# The Spotify account (username) allowed to reconnect; the reconnect link refuses any other.
+SPOTIFY_USER_ID = "{{SPOTIFY_USER_ID}}"
 
-# Failure alerts (src/alerts.ts). The binding can only send to this one address.
-ALERT_FROM = "spotify-sync@example.com"
-ALERT_EMAIL_TO = "spotify-sync@example.com"
+# Alerts and digests (src/alerts.ts) through Cloudflare Email Service. ALERT_FROM must be on a
+# domain onboarded to Email Service; the binding can only send to ALERT_EMAIL_TO. No email?
+# Delete these two lines and the [[send_email]] block: sending is skipped without the binding.
+ALERT_FROM = "{{ALERT_FROM}}"
+ALERT_EMAIL_TO = "{{ALERT_EMAIL_TO}}"
+# AI editor feature switch: "on" or "off" (default "off").
+AI_EDITOR = "{{AI_EDITOR}}"
 
 [[send_email]]
 name = "ALERT_EMAIL"
-destination_address = "spotify-sync@example.com"
-allowed_sender_addresses = ["spotify-sync@example.com"]
+destination_address = "{{ALERT_EMAIL_TO}}"
+allowed_sender_addresses = ["{{ALERT_FROM}}"]
 
-# Secrets (`wrangler secret put <NAME>`; locally in .dev.vars):
+# Secrets (`npx wrangler secret put <NAME> -c wrangler.generated.toml`; locally in .dev.vars):
 #   SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SYNC_FULL_SECRET (only for /sync-full)
-# The Spotify app must list https://spotify.example.com/reconnect/callback as a redirect URI.
+# The Spotify app must list https://<CUSTOM_DOMAIN>/reconnect/callback as a redirect URI.
 
 [observability]
 enabled = true
 
 # ---------------------------------------------------------------------------
-# Test: `npx wrangler dev --env test --test-scheduled`, then
+# Test: `npm run dev` (wrangler dev --env test --test-scheduled), then
 #   curl "http://localhost:8787/__scheduled?cron=*/10+*+*+*+*"
 # Runs locally in dry_run against the remote test D1 (real Spotify reads, no writes).
 # ---------------------------------------------------------------------------
 [env.test]
-name = "spotify-automation-test"
+name = "{{TEST_WORKER_NAME}}"
 workers_dev = false
 routes = []
 
 [[env.test.d1_databases]]
 binding = "DB"
-database_name = "spotify-automation-test"
-database_id = "YOUR_TEST_D1_DATABASE_ID"
+database_name = "{{TEST_D1_DATABASE_NAME}}"
+database_id = "{{TEST_D1_DATABASE_ID}}"
 remote = true
 
 [env.test.vars]
 WRITE_MODE = "dry_run"
-SPOTIFY_ALL_PLAYLIST_ID = "YOUR_ALL_PLAYLIST_ID"
-SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
+SPOTIFY_ALL_PLAYLIST_ID = "{{SPOTIFY_ALL_PLAYLIST_ID}}"
+SPOTIFY_FREQUENT_PLAYLIST_ID = "{{SPOTIFY_FREQUENT_PLAYLIST_ID}}"
 FREQUENT_MIN_PLAYS = "5"
-SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
-TIME_ZONE = "America/Los_Angeles"
-SPOTIFY_USER_ID = "your-spotify-user"
+SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "{{SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID}}"
+TIME_ZONE = "{{TIME_ZONE}}"
+SPOTIFY_USER_ID = "{{SPOTIFY_USER_ID}}"
+AI_EDITOR = "{{AI_EDITOR}}"
 # PUBLIC_URL unset: no reconnect links. For a dry-run preview with the vinyl image, pass
-#   --var PUBLIC_URL:https://spotify.example.com
+#   --var PUBLIC_URL:https://<CUSTOM_DOMAIN>

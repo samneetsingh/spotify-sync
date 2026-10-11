@@ -1,13 +1,39 @@
 // Shared helpers for local maintenance scripts (run with `npx tsx scripts/<name>.ts`).
-// Credentials come from .dev.vars; the database is reached through `wrangler d1 execute`.
+// Credentials come from .dev.vars; the database is reached through `wrangler d1 execute`,
+// using the generated wrangler config (see wranglerConfig below).
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const DEFAULT_DB = "spotify-sync";
 const TOKEN_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The wrangler config the scripts pass to wrangler: $WRANGLER_CONFIG (another instance's
+ * generated config), else wrangler.generated.toml from `npm run configure` when it exists.
+ * Without either, wrangler reads the wrangler.toml template and `--db` is required.
+ */
+export const wranglerConfig: string | undefined = (() => {
+  const explicit = process.env.WRANGLER_CONFIG;
+  if (explicit) {
+    if (!existsSync(resolve(ROOT, explicit))) throw new Error(`WRANGLER_CONFIG file not found: ${explicit}`);
+    return explicit;
+  }
+  return existsSync(resolve(ROOT, "wrangler.generated.toml")) ? "wrangler.generated.toml" : undefined;
+})();
+
+/**
+ * `--db <name>`, else the production database_name of the active wrangler config (the first
+ * one in the file: the template puts [[d1_databases]] before [env.test]).
+ */
+export function targetDb(): string {
+  const explicit = flag("db", "");
+  if (explicit) return explicit;
+  const name = wranglerConfig && readFileSync(resolve(ROOT, wranglerConfig), "utf8").match(/^database_name\s*=\s*"([^"]+)"/m)?.[1];
+  if (!name) throw new Error("No database: pass --db <name>, or run `npm run configure` first");
+  return name;
+}
 
 /** Parses .dev.vars (KEY=VALUE lines). */
 export function devVars(): Record<string, string> {
@@ -36,7 +62,8 @@ export function flag(name: string, fallback: string): string {
 
 function wrangler(args: string[], retried = false): string {
   try {
-    return execFileSync("npx", ["wrangler", ...args], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    const config = wranglerConfig ? ["-c", wranglerConfig] : [];
+    return execFileSync("npx", ["wrangler", ...args, ...config], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
   } catch (err) {
     // The bare "Command failed" hides the reason; wrangler puts it on stderr, or on stdout with --json.
     const { stderr, stdout } = err as { stderr?: string; stdout?: string };

@@ -2,7 +2,8 @@
  * Spotify login: runs the OAuth flow in your browser and stores the resulting refresh
  * token in the D1 `state` table, where the Worker reads (and rotates) it. Never prints it.
  *
- * Usage: npm run token [-- --db spotify-automation-test] [--no-open]
+ * Usage: npm run token [-- --db <database name>] [--no-open]
+ * The database defaults to the production one in wrangler.generated.toml (or $WRANGLER_CONFIG).
  * Needs SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET and SPOTIFY_REDIRECT_URI in .dev.vars.
  * The redirect URI must be a loopback http URL (e.g. http://127.0.0.1:8888/callback)
  * registered in the Spotify app; Spotify rejects "localhost".
@@ -10,16 +11,17 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { SPOTIFY_SCOPE } from "../src/spotify/auth";
-import { DEFAULT_DB, flag, requireVars, seedRefreshToken, tokenRequest } from "./lib";
+import { requireVars, seedRefreshToken, targetDb, tokenRequest, wranglerConfig } from "./lib";
 
 const TIMEOUT_MS = 5 * 60_000;
 
-const db = flag("db", DEFAULT_DB);
+const db = targetDb();
 const vars = requireVars("SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "SPOTIFY_REDIRECT_URI");
 const redirect = new URL(vars.SPOTIFY_REDIRECT_URI!);
 if (redirect.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(redirect.hostname)) {
   throw new Error("SPOTIFY_REDIRECT_URI must be http://127.0.0.1:<port>/<path> for the local login flow");
 }
+console.log(`D1 database "${db}" (config: ${wranglerConfig ?? "wrangler.toml"})`);
 
 const state = crypto.randomUUID();
 const authUrl = new URL("https://accounts.spotify.com/authorize");
