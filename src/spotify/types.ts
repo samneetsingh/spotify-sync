@@ -41,6 +41,11 @@ export interface PlaylistItemsResponse {
   next?: string | null;
 }
 
+export interface MyPlaylistsResponse {
+  items?: Array<{ id?: string } | null> | null;
+  next?: string | null;
+}
+
 export interface PlaylistResponse {
   tracks?: { total?: number | null } | null;
 }

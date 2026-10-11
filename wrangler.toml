@@ -16,7 +16,7 @@ preview_urls = false
 [triggers]
 # UTC, same times the Python server used. Never delete this Worker with crons live:
 # set crons = [], deploy, wait ~15 min, then delete (see PLAN.md section 7).
-crons = ["*/10 * * * *", "0 3 * * *", "0 4 * * *"]
+crons = ["*/10 * * * *", "0 3 * * *", "0 4 * * *", "5 8 * * *"]
 
 # Local `wrangler dev` and vitest use a local simulated DB for this binding;
 # only `wrangler deploy` reaches the real production database.
@@ -33,6 +33,8 @@ SPOTIFY_ALL_PLAYLIST_ID = "YOUR_ALL_PLAYLIST_ID"
 SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
 FREQUENT_MIN_PLAYS = "5"
 SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
+# "Today" for the history playlists (On This Day, Forgotten Favorites).
+TIME_ZONE = "America/Los_Angeles"
 
 # Failure alerts (src/alerts.ts). The binding can only send to this one address.
 ALERT_FROM = "spotify-sync@example.com"
@@ -70,3 +72,4 @@ SPOTIFY_ALL_PLAYLIST_ID = "YOUR_ALL_PLAYLIST_ID"
 SPOTIFY_FREQUENT_PLAYLIST_ID = "YOUR_FREQUENT_PLAYLIST_ID"
 FREQUENT_MIN_PLAYS = "5"
 SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID = "YOUR_HINDI_PLAYLIST_ID"
+TIME_ZONE = "America/Los_Angeles"

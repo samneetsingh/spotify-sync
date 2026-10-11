@@ -124,6 +124,19 @@ const WORKER_ACTIONS = [
   )`,
 ];
 
+/** Per-play fields from the privacy export (`import-history`), named as Spotify names them. NULL for API plays. */
+export const EXPORT_PLAY_FIELDS = [
+  ["ms_played", "INTEGER"],
+  ["platform", "TEXT"],
+  ["conn_country", "TEXT"],
+  ["reason_start", "TEXT"],
+  ["reason_end", "TEXT"],
+  ["shuffle", "INTEGER"],
+  ["skipped", "INTEGER"],
+  ["offline", "INTEGER"],
+  ["incognito_mode", "INTEGER"],
+] as const;
+
 interface Migration {
   version: number;
   statements: string[];
@@ -136,6 +149,7 @@ interface Migration {
 export const MIGRATIONS: Migration[] = [
   { version: 7, statements: PYTHON_V7_SCHEMA, records: [1, 2, 3, 4, 5, 6, 7] },
   { version: 8, statements: WORKER_ACTIONS },
+  { version: 9, statements: EXPORT_PLAY_FIELDS.map(([name, type]) => `ALTER TABLE plays ADD COLUMN ${name} ${type}`) },
 ];
 
 export function migrationStatements(m: Migration): string[] {
@@ -156,7 +170,15 @@ export async function migrate(db: D1Database): Promise<void> {
 
   for (const m of MIGRATIONS) {
     if (m.version <= currentVersion) continue;
-    await db.batch(migrationStatements(m).map((sql) => db.prepare(sql)));
+    try {
+      await db.batch(migrationStatements(m).map((sql) => db.prepare(sql)));
+    } catch (err) {
+      // Two jobs starting in the same minute can both see a migration as pending; the
+      // loser's batch fails (v9's ALTER TABLEs aren't idempotent). Fine if it's now applied.
+      const now = await db.prepare("SELECT MAX(version) AS version FROM schema_migrations").first<{ version: number | null }>();
+      if ((now?.version ?? 0) >= m.version) continue;
+      throw err;
+    }
     console.log(`Applied migration v${m.version}`);
   }
 }

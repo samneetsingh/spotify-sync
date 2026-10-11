@@ -15,10 +15,12 @@ npm run import-history -- <dir> [--dry-run]
 
 ## Architecture
 
-- `src/index.ts`: `scheduled()` maps the cron string to a job (`*/10` sync, `0 3` artist-playlists, `0 4` hindi-favorites; `10 3`/`10 4` are accepted too). `fetch()` serves only `POST /sync-full` (Bearer `SYNC_FULL_SECRET`, constant-time compare). `withJob` runs migrations, alerting and D1 query counting around every job.
+- `src/index.ts`: `scheduled()` maps the cron string to a job (`*/10` sync, `0 3` artist-playlists, `0 4` hindi-favorites, `5 8` history-playlists; `10 3`/`10 4` are accepted too). `fetch()` serves only `POST /sync-full` (Bearer `SYNC_FULL_SECRET`, constant-time compare). `withJob` runs migrations, alerting and D1 query counting around every job.
 - `src/jobs/*`: each job takes `(config, db, spotifyClient)`. Write-mode gating: `SpotifyClient` blocks Spotify writes unless `WRITE_MODE=live`; jobs skip D1 *state* writes (`playlist_tracks`, `state`, `playlists`, `playlist_removals`, `playlist_exclusions`) in `dry_run`. Metadata (`tracks`, `plays`, `track_artists`, `artists`, `sync_runs`) is always written.
 - `src/db/queries.ts`: bulk writes bind one JSON array and expand it with `json_each` (500 rows/statement). Keep it this way; D1 caps queries per invocation (1,000) and bound parameters per query (100).
-- `src/db/schema.ts`: migrations. v7 baseline equals the original Python schema and records versions 1-7 (keeps a D1 export loadable by the old Python app); Worker-only changes start at v8.
+- `src/db/schema.ts`: migrations. v7 baseline equals the original Python schema and records versions 1-7 (keeps a D1 export loadable by the old Python app); Worker-only changes start at v8. v9 adds the privacy export's per-play fields to `plays` (NULL for API plays).
+- History playlists (`src/jobs/history-playlists.ts`) keep their playlist ids in `state` (`playlist:<key>`, `off` disables) and are rewritten via `replacePlaylistItems` only when the local day/week (`TIME_ZONE`) changes.
+- `scripts/import-history.ts` treats the privacy export as the source of truth for plays (>= 30 s) inside its span: it reconciles (insert/update/delete), it doesn't append.
 - Spotify refresh token lives in D1 `state` (`spotify_refresh_token`), not in a secret, so the Worker can persist rotations.
 - `SPOTIFY_ALL_PLAYLIST_ID` is only the namespace of the sync cursor key (`cursor_after_ms:<id>`); nothing is written to that playlist.
 
@@ -33,5 +35,7 @@ npm run import-history -- <dir> [--dry-run]
 
 - **Never delete a Worker with live crons.** Set `crons = []`, deploy, wait ~15 min, then delete. Doing otherwise orphaned a trigger and stalled cron dispatch account-wide (docs/migration/PROGRESS.md, Phase 7).
 - Cron changes take minutes (up to ~30) to propagate; don't redeploy repeatedly while waiting.
+- Spotify has no playlist delete: "deleting" your own playlist only unfollows it, and writes to it still succeed. Detect it by its absence from `GET /me/playlists` (`followedPlaylistIds`), not from write errors.
+- The first wrangler API call after it refreshes its expired OAuth token can fail with `7403` ("account not valid"); the next call works. `scripts/lib.ts` retries that once.
 - `wrangler d1 execute --file` imports are atomic per file; very large single files can fail with `D1_RESET_DO`. Chunk them.
 - `wrangler.toml` top level is production. `[env.test]` binds the test D1 with `remote = true`; vitest sets `remoteBindings: false` so tests never touch a remote database.

@@ -100,6 +100,11 @@ export function mockSpotify(spotify: Json): { calls: Call[]; restore: () => void
       calls.push({ op: "playlist_add", playlist_id: m[1], uris: body.uris });
       return json({ snapshot_id: "s" }, 201);
     }
+    if (m && method === "PUT") {
+      calls.push({ op: "playlist_replace", playlist_id: m[1], uris: body.uris });
+      if ((spotify.missing_playlists ?? []).includes(m[1])) return json({ error: { status: 404, message: "Not found" } }, 404);
+      return json({ snapshot_id: "s" });
+    }
     m = path.match(/^\/v1\/playlists\/([^/]+)$/);
     if (m && method === "GET") {
       calls.push({ op: "playlist_total", playlist_id: m[1] });
@@ -114,6 +119,12 @@ export function mockSpotify(spotify: Json): { calls: Call[]; restore: () => void
           return s == null ? null : { id, name: s.name, genres: s.genres, popularity: s.popularity, followers: { total: s.followers } };
         }),
       });
+    }
+    if (method === "GET" && path === "/v1/me/playlists") {
+      const [limit, offset] = [Number(q.get("limit")), Number(q.get("offset"))];
+      calls.push({ op: "my_playlists", limit, offset });
+      const ids: string[] = spotify.my_playlists ?? [];
+      return json({ items: ids.slice(offset, offset + limit).map((id) => ({ id })), next: offset + limit < ids.length ? "more" : null });
     }
     if (method === "POST" && path === "/v1/me/playlists") {
       calls.push({ op: "create_playlist", name: body.name, public: body.public, description: body.description });
@@ -209,6 +220,9 @@ export function scenarioConfig(c: Json, writeMode: Config["writeMode"] = "live")
       maxTracksPerPlaylist: c.artist_discovery.max_tracks_per_playlist,
       minTracksPerPlaylist: c.artist_discovery.min_tracks_per_playlist,
     },
+    // Not part of the Python parity fixtures (Worker-only job).
+    timeZone: "UTC",
+    historyPlaylists: { onThisDayPerYear: 10, forgottenMinPlays: 20, forgottenIdleDays: 365, forgottenSize: 50 },
   };
 }
 

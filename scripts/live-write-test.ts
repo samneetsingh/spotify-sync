@@ -1,13 +1,15 @@
 /**
  * Smoke test of real Spotify writes: drives the Worker's SpotifyClient in live mode,
  * touching only a throwaway playlist named "worker-migration-test". Creates it, adds one
- * recently played track, verifies, then unfollows (deletes) it.
+ * recently played track, replaces the contents with two tracks (the history playlists'
+ * write), verifies each step, then unfollows (deletes) it and checks it left the library
+ * (how the history playlists notice a deletion).
  *
  * Usage: npm run live-write-test [-- --db spotify-sync]
  * Credentials from .dev.vars; refresh token read from (and rotations saved to) D1.
  */
 import { SpotifyClient } from "../src/spotify/client";
-import { fetchPlaylistTracks } from "../src/spotify/playlist";
+import { fetchPlaylistTracks, followedPlaylistIds } from "../src/spotify/playlist";
 import { DEFAULT_DB, d1Rows, flag, requireVars, seedRefreshToken } from "./lib";
 
 const db = flag("db", DEFAULT_DB);
@@ -40,18 +42,31 @@ async function main() {
   const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID!, env.SPOTIFY_CLIENT_SECRET!, stateDb, "live");
   let playlistId: string | null = null;
   try {
-    const recent = await sp.getRecentlyPlayed({ limit: 1 });
-    const uri = recent.items?.[0]?.track?.uri;
+    const recent = await sp.getRecentlyPlayed({ limit: 10 });
+    const uris = [...new Set((recent.items ?? []).map((i) => i.track?.uri).filter((u): u is string => !!u))];
+    const uri = uris[0];
     check(uri, `picked a recently played track (${uri})`);
 
     playlistId = (await sp.createPlaylist({ name: "worker-migration-test", public: false, description: "Temp test, safe to delete" })).id;
     check(playlistId && !playlistId.startsWith("would-create:"), `created playlist ${playlistId}`);
+    check((await followedPlaylistIds(sp)).has(playlistId), "new playlist is listed in /me/playlists");
 
     await sp.addToPlaylist(playlistId, [uri!]);
     const total = (await sp.getPlaylist(playlistId, "tracks.total")).tracks?.total;
     check(total === 1, `playlist total is 1 (got ${total})`);
     const items = await fetchPlaylistTracks(sp, playlistId);
     check(items.length === 1 && items[0]!.uri === uri, "playlist contains exactly the added track");
+
+    const replacement = [uris[1] ?? uri!, uri!];
+    await sp.replacePlaylistItems(playlistId, replacement);
+    const replaced = (await fetchPlaylistTracks(sp, playlistId)).map((t) => t.uri);
+    check(replaced.join() === replacement.join(), "replace left exactly the new tracks, in order");
+
+    const deleted = playlistId;
+    await sp.unfollowPlaylist(deleted);
+    playlistId = null;
+    console.log(`  ok  unfollowed (deleted) ${deleted}`);
+    check(!(await followedPlaylistIds(sp)).has(deleted), "after unfollowing it is gone from /me/playlists");
   } finally {
     if (playlistId && !playlistId.startsWith("would-create:")) {
       await sp.unfollowPlaylist(playlistId);
@@ -61,8 +76,8 @@ async function main() {
 
   const actions = sp.drainActions();
   check(
-    actions.map((a) => `${a.action}:${a.executed}`).join(",") === "createPlaylist:true,addToPlaylist:true,unfollowPlaylist:true",
-    "client recorded 3 executed writes",
+    actions.map((a) => `${a.action}:${a.executed}`).join(",") === "createPlaylist:true,addToPlaylist:true,replacePlaylistItems:true,unfollowPlaylist:true",
+    "client recorded 4 executed writes",
   );
   if (token !== initialToken) console.log("Spotify rotated the refresh token during this run; saved the new one to D1.");
   console.log("Live write test passed.");

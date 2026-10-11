@@ -5,6 +5,7 @@ import { countingD1 } from "./db/counting";
 import { migrate } from "./db/schema";
 import { runArtistPlaylists } from "./jobs/artist-playlists";
 import { runHindiFavorites } from "./jobs/hindi-favorites";
+import { runHistoryPlaylists } from "./jobs/history-playlists";
 import { runSync, runSyncFull } from "./jobs/sync";
 import { SpotifyClient } from "./spotify/client";
 
@@ -53,6 +54,9 @@ export default {
       case "0 4 * * *":
       case "10 4 * * *": // offset while the Python server is live (Amendment A2)
         await withJob(env, "hindi-favorites", runHindiFavorites);
+        break;
+      case "5 8 * * *": // 00:05 PST / 01:05 PDT, just after local midnight for On This Day
+        await withJob(env, "history-playlists", runHistoryPlaylists);
         break;
       default:
         console.error(`Unknown cron: ${event.cron}`);

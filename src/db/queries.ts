@@ -425,3 +425,49 @@ export async function hindiFavorites(db: D1Database, minPlays: number): Promise<
     .all<PlaylistTrackRef>();
   return results.map(({ track_id, track_uri }) => ({ track_id, track_uri }));
 }
+
+// --- history playlists ---
+
+export interface TrackPlays extends PlaylistTrackRef {
+  plays: number;
+}
+
+/**
+ * Tracks played in each [start, end) ms range, keyed by the range's index, most played
+ * first (ties: played earlier that day first).
+ */
+export async function tracksPlayedIn(db: D1Database, ranges: Array<[number, number]>): Promise<Map<number, TrackPlays[]>> {
+  const out = new Map<number, TrackPlays[]>();
+  if (!ranges.length) return out;
+  const { results } = await db
+    .prepare(
+      `SELECT r.key AS range_index, p.track_id, t.track_uri, COUNT(*) AS plays, MIN(p.played_at_ms) AS first_ms
+       FROM json_each(?1) r
+       JOIN plays p ON p.played_at_ms >= json_extract(r.value, '$[0]') AND p.played_at_ms < json_extract(r.value, '$[1]')
+       JOIN tracks t ON t.track_id = p.track_id
+       GROUP BY r.key, p.track_id, t.track_uri
+       ORDER BY r.key, plays DESC, first_ms`,
+    )
+    .bind(JSON.stringify(ranges))
+    .all<TrackPlays & { range_index: number }>();
+  for (const { range_index, track_id, track_uri, plays } of results) {
+    if (!out.has(range_index)) out.set(range_index, []);
+    out.get(range_index)!.push({ track_id, track_uri, plays });
+  }
+  return out;
+}
+
+/** Tracks with at least `minPlays` plays and none since `idleSinceMs`, most played first. */
+export async function forgottenTracks(db: D1Database, minPlays: number, idleSinceMs: number): Promise<TrackPlays[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.track_id, t.track_uri, COUNT(*) AS plays
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       GROUP BY p.track_id, t.track_uri
+       HAVING COUNT(*) >= ?1 AND MAX(p.played_at_ms) < ?2
+       ORDER BY plays DESC, p.track_id`,
+    )
+    .bind(minPlays, idleSinceMs)
+    .all<TrackPlays>();
+  return results;
+}

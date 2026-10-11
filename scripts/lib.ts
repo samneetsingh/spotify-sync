@@ -34,8 +34,18 @@ export function flag(name: string, fallback: string): string {
   return i > 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
-function wrangler(args: string[]): string {
-  return execFileSync("npx", ["wrangler", ...args], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+function wrangler(args: string[], retried = false): string {
+  try {
+    return execFileSync("npx", ["wrangler", ...args], { cwd: ROOT, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    // The bare "Command failed" hides the reason; wrangler puts it on stderr, or on stdout with --json.
+    const { stderr, stdout } = err as { stderr?: string; stdout?: string };
+    const detail = (stderr?.trim() || stdout?.trim() || "").slice(-800);
+    // The first API call after wrangler refreshes its expired OAuth token can fail with
+    // 7403 ("account not valid"); the next one succeeds (seen in wrangler's logs, 2026-10-11).
+    if (!retried && detail.includes("7403")) return wrangler(args, true);
+    throw new Error(`wrangler ${args.slice(0, 3).join(" ")} failed${detail ? `:\n${detail}` : ""}`);
+  }
 }
 
 /** Runs one SQL statement against the remote database and returns its rows. */

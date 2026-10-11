@@ -5,6 +5,7 @@ A Cloudflare Worker that keeps your Spotify library tidy from your listening his
 - **Every 10 minutes**: records recently played tracks in D1, adds new tracks to **Liked Songs**, and adds tracks with enough plays to a **frequent** playlist.
 - **03:00 UTC**: creates and fills **per-artist playlists** for artists you play a lot, respects tracks you remove, and stops managing playlists you delete.
 - **04:00 UTC**: fills a **Hindi/Desi favorites** playlist based on artist genres.
+- **08:05 UTC** (just after midnight in `TIME_ZONE`): rewrites two playlists from the whole history. **On This Day** holds each past year's most played tracks on today's date, oldest year first. **Forgotten Favorites** is a new weekly set of 50 songs you've played 20+ times but not in over a year. Both are created on their first run.
 
 All state lives in a D1 database (plays, tracks, artists, playlist contents). Playlists are built from that history, not from live API calls.
 
@@ -29,7 +30,7 @@ The Spotify app's redirect URI must be a loopback URL such as `http://127.0.0.1:
 | `npm run deploy` | Deploys to production (normally done by Workers Builds on push to `main`) |
 | `npm run token` | Spotify login; writes the refresh token to D1 (`-- --db <name>` for another DB) |
 | `npm run import-history -- <dir>` | Reconciles D1 with a Spotify privacy export (Extended Streaming History JSON): inside the export's span, plays become exactly its streams of 30 s or more (missing ones inserted, skips and API duplicates deleted); later plays are untouched. Then fetches artist credits and metadata. Pass the whole export folder; `--dry-run` prints the per-year diff without writing. |
-| `npm run live-write-test` | Creates, fills and deletes a throwaway playlist to check real Spotify writes |
+| `npm run live-write-test` | Creates, fills, replaces and deletes a throwaway playlist to check real Spotify writes |
 
 ## Configuration
 
@@ -73,6 +74,8 @@ curl -X POST http://localhost:8787/sync-full \
   -H "Authorization: Bearer $(grep '^SYNC_FULL_SECRET=' .dev.vars | cut -d= -f2-)"
 ```
 
+**History playlists.** Their ids live in the D1 `state` table (`playlist:on_this_day`, `playlist:forgotten_favorites`). Deleting a playlist on Spotify switches it off; so does setting its value to `off`. Deleting the row makes the next run create a fresh one. The export's per-play fields (`ms_played`, `reason_end`, `shuffle`, `skipped`, `platform`, `conn_country`, ...) are on `plays` for imported rows; API plays leave them NULL.
+
 **Changing or removing the Worker.** Never delete a Worker while its crons are live:
 
 1. Set `crons = []` and deploy.
@@ -98,7 +101,7 @@ src/
   index.ts            cron dispatcher + /sync-full; runs each job with alerts + D1 query count logging
   alerts.ts           failure / recovery / sync-gap emails
   config.ts, env.ts   typed config from wrangler.toml vars and secrets
-  jobs/               sync, artist-playlists, hindi-favorites, playlist-cache backfill
+  jobs/               sync, artist-playlists, hindi-favorites, history-playlists, playlist-cache backfill
   db/                 schema migrations, bulk json_each queries, state, query counter
   spotify/            fetch-based client (token refresh, retries, write gating), types, parsers
 scripts/              local tools (token, import-history, live-write-test, verify-counts)

@@ -1,6 +1,7 @@
 import type { WriteMode } from "../env";
 import type {
   CreatePlaylistResponse,
+  MyPlaylistsResponse,
   PlaylistItemsResponse,
   PlaylistResponse,
   RecentlyPlayedResponse,
@@ -19,7 +20,7 @@ const RETRY_DELAY_MS = 1000;
 const MAX_RETRY_AFTER_S = 30;
 
 export interface SpotifyAction {
-  action: "addToPlaylist" | "addToLikedSongs" | "createPlaylist" | "unfollowPlaylist";
+  action: "addToPlaylist" | "replacePlaylistItems" | "addToLikedSongs" | "createPlaylist" | "unfollowPlaylist";
   target: string | null;
   items: string[];
   executed: boolean;
@@ -182,6 +183,14 @@ export class SpotifyClient {
     return this.get(`/playlists/${playlistId}/tracks`, p);
   }
 
+  /** Playlists the user owns or follows. */
+  async getMyPlaylists(params: { limit?: number; offset?: number }): Promise<MyPlaylistsResponse> {
+    const p: Record<string, string> = {};
+    if (params.limit != null) p.limit = String(params.limit);
+    if (params.offset != null) p.offset = String(params.offset);
+    return this.get("/me/playlists", p);
+  }
+
   async getMe(): Promise<UserProfile> {
     return this.get("/me");
   }
@@ -230,6 +239,14 @@ export class SpotifyClient {
   async addToPlaylist(playlistId: string, uris: string[]): Promise<void> {
     await this.write("addToPlaylist", playlistId, uris, () =>
       this.post(`/playlists/${playlistId}/tracks`, { uris }),
+    );
+  }
+
+  /** Replaces the playlist's whole contents (Spotify accepts at most 100 URIs here). */
+  async replacePlaylistItems(playlistId: string, uris: string[]): Promise<void> {
+    if (uris.length > 100) throw new Error(`replacePlaylistItems takes at most 100 URIs (got ${uris.length})`);
+    await this.write("replacePlaylistItems", playlistId, uris, () =>
+      this.put(`/playlists/${playlistId}/tracks`, { uris }),
     );
   }
 

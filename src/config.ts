@@ -12,6 +12,13 @@ export interface ArtistDiscoveryConfig {
   minTracksPerPlaylist: number;
 }
 
+export interface HistoryPlaylistsConfig {
+  onThisDayPerYear: number;
+  forgottenMinPlays: number;
+  forgottenIdleDays: number;
+  forgottenSize: number;
+}
+
 export interface Config {
   writeMode: WriteMode;
   /** Only used as the sync cursor key namespace (`cursor_after_ms:<id>`), not as a write target. */
@@ -26,6 +33,8 @@ export interface Config {
   likeBatchSize: number;
   cacheRefreshHours: number;
   artistDiscovery: ArtistDiscoveryConfig;
+  timeZone: string;
+  historyPlaylists: HistoryPlaylistsConfig;
 }
 
 // Defaults mirror src/config/__init__.py + config.yaml.
@@ -53,7 +62,24 @@ export function loadConfig(env: Env): Config {
       maxTracksPerPlaylist: 50,
       minTracksPerPlaylist: 10,
     },
+    timeZone: timeZone(env.TIME_ZONE),
+    historyPlaylists: {
+      onThisDayPerYear: 10,
+      forgottenMinPlays: 20,
+      forgottenIdleDays: 365,
+      forgottenSize: 50,
+    },
   };
+}
+
+function timeZone(raw: string | undefined): string {
+  const tz = raw || "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+  } catch {
+    throw new Error(`TIME_ZONE must be an IANA time zone such as America/Los_Angeles (got ${tz})`);
+  }
+  return tz;
 }
 
 function positiveInt(name: string, raw: string | undefined, fallback: number): number {

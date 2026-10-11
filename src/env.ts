@@ -7,6 +7,8 @@ export interface Env {
   SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID?: string;
   FREQUENT_MIN_PLAYS?: string;
   HINDI_FAVORITES_MIN_PLAYS?: string;
+  /** IANA zone for the history playlists' "today" (e.g. America/Los_Angeles); defaults to UTC. */
+  TIME_ZONE?: string;
   WRITE_MODE: string;
   SYNC_FULL_SECRET: string;
   /** Failure alerts (optional): send_email binding plus sender/recipient addresses. */
