@@ -144,7 +144,7 @@ input[type=number]:hover,select:hover{border-color:${C.mute}}
 input[type=file]{display:block;width:100%;max-width:100%;padding:8px 0;color:${C.soft};font:inherit;${TY.meta};cursor:pointer}
 input[type=file]::file-selector-button{min-height:44px;margin-right:12px;padding:0 20px;border-radius:999px;border:1px solid ${C.line};background:${C.raised};color:${C.text};font:inherit;font-weight:700;cursor:pointer}
 input[type=file]:hover::file-selector-button{border-color:${C.mute}}
-progress{display:block;width:100%;height:8px;border:0;border-radius:999px;background:${C.raised};color:${C.green};overflow:hidden;-webkit-appearance:none;appearance:none}
+progress{display:block;width:100%;height:8px;margin-top:16px;border:0;border-radius:999px;background:${C.raised};color:${C.green};overflow:hidden;-webkit-appearance:none;appearance:none}
 progress::-webkit-progress-bar{background:${C.raised};border-radius:999px}
 progress::-webkit-progress-value{background:${C.green};border-radius:999px}
 progress::-moz-progress-bar{background:${C.green};border-radius:999px}
