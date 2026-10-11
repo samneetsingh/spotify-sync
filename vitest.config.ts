@@ -15,8 +15,9 @@ export default defineConfig({
       // Tests reset tables; never let them reach a remote D1.
       remoteBindings: false,
       wrangler: { configPath: `./${file}` },
-      // .dev.vars may hold a real OpenAI key; tests must never call the API (they inject fetch).
-      miniflare: { bindings: { OPENAI_API_KEY: "" } },
+      // .dev.vars holds real credentials; tests must never call OpenAI or authenticate against
+      // Spotify (they inject fetch and pass their own fake client ids), so blank them.
+      miniflare: { bindings: { OPENAI_API_KEY: "", SPOTIFY_CLIENT_ID: "", SPOTIFY_CLIENT_SECRET: "" } },
     }),
   ],
   // Git worktrees for parallel work live under .claude/worktrees; their tests run in their own checkout.
