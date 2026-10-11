@@ -1,6 +1,8 @@
 {
   "name": "spotify-sync",
   "private": true,
+  "description": "Cloudflare Worker + D1 that keeps your Spotify library tidy from your listening history: Liked Songs, frequent and per-artist playlists, history playlists and email digests.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "configure": "node scripts/configure.mjs",
@@ -12,6 +14,9 @@
     "token": "tsx scripts/token.ts",
     "import-history": "tsx scripts/import-history.ts",
     "live-write-test": "tsx scripts/live-write-test.ts"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.0",
