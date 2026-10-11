@@ -43,6 +43,12 @@ describe("safeNext", () => {
     ["/claim?k=abc"],
     ["/logout"],
     [`/${"a".repeat(600)}`],
+    // Dot segments that normalise into a protocol-relative `//host`.
+    ["/.//evil.com"],
+    ["/a/..//evil.com"],
+    ["/%2e//evil.com"],
+    ["/%2e%2e//evil.com"],
+    ["/settings/..//evil.com/x"],
   ])("falls back to / for %j", (input) => {
     expect(safeNext(input)).toBe("/");
   });

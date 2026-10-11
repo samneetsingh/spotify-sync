@@ -88,6 +88,17 @@ describe("ensureClaimEmail (the 10-minute cron)", () => {
     expect((await readClaim(env.DB))!.autoSends).toBe(1);
   });
 
+  it("sends one link when runs overlap (parallel cron invocations)", async () => {
+    const email = fakeEmail();
+    const e = testEnv({ ALERT_EMAIL: email.binding });
+    const results = await Promise.all(Array.from({ length: 4 }, () => ensureClaimEmail(e, env.DB, NOW)));
+    expect(results.filter((r) => r === "sent")).toHaveLength(1);
+    expect(results.filter((r) => r === "pending")).toHaveLength(3);
+    expect(email.sent).toHaveLength(1);
+    expect(linkIn(email.sent[0]!.text)).toBe((await readClaim(env.DB))!.nonce);
+    expect((await readClaim(env.DB))!.autoSends).toBe(1);
+  });
+
   it("never logs the link", async () => {
     const lines: string[] = [];
     for (const level of ["log", "warn", "error", "info", "debug"] as const) vi.spyOn(console, level).mockImplementation((...a: unknown[]) => void lines.push(a.map(String).join(" ")));
@@ -137,6 +148,27 @@ describe("POST /claim/resend", () => {
     expect(email.sent).toHaveLength(5);
     await route(post("/claim/resend"), e, Date.UTC(2026, 9, 12, 0, 5));
     expect(email.sent).toHaveLength(6);
+  });
+
+  it("can't be raced past the limits: parallel requests send one email", async () => {
+    await sentAt(NOW);
+    const email = fakeEmail();
+    const e = testEnv({ ALERT_EMAIL: email.binding });
+    const results = await Promise.all(Array.from({ length: 6 }, () => route(post("/claim/resend"), e, NOW + HOUR)));
+    expect(results.map((r) => r.status)).toEqual(Array(6).fill(200));
+    expect(email.sent).toHaveLength(1);
+    expect((await readClaim(env.DB))!.resends).toEqual({ day: "2026-10-11", count: 1 });
+  });
+
+  it("keeps the previous link and limits when the resend email fails", async () => {
+    await sentAt(NOW);
+    const before = await getState(env.DB, "claim");
+    const res = await route(post("/claim/resend"), testEnv({ ALERT_EMAIL: fakeEmail({ fail: true }).binding }), NOW + HOUR);
+    expect(res.status).toBe(503);
+    expect(await getState(env.DB, "claim")).toBe(before);
+    const email = fakeEmail();
+    expect((await route(post("/claim/resend"), testEnv({ ALERT_EMAIL: email.binding }), NOW + HOUR)).status).toBe(200);
+    expect(email.sent).toHaveLength(1);
   });
 
   it("works after the 3 automatic sends ran out", async () => {

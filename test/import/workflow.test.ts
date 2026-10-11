@@ -9,7 +9,8 @@ import { migrate } from "../../src/db/schema";
 import type { Env } from "../../src/env";
 import { handleImportRoutes } from "../../src/import";
 import { getImport } from "../../src/import/store";
-import { normalizeOptions } from "../../src/import/workflow";
+import { STAGING_INCOMPLETE } from "../../src/import/reconcile";
+import { expireImport, normalizeOptions } from "../../src/import/workflow";
 import { resetDb } from "../parity/spotify-fixture";
 import { allPlays, audioRecord, bucketKeys, buildZip, clearBucket, count, enc, episodeRecord, exportJson, insertImport, mockSpotifyApi, putUpload, type SpotifyMock } from "./helpers";
 
@@ -186,5 +187,96 @@ describe("ImportWorkflow", () => {
     await env.IMPORT_WORKFLOW.create({ id, params: { importId: id, attempt: 0 } });
     await instance.waitForStatus("errored");
     expect((await getImport(db, id))?.error).toMatch(/^This looks like the regular Account data export/);
+  });
+});
+
+describe("a leftover Workflow instance", () => {
+  const stagedFor = (id: string) => count(db, `SELECT COUNT(*) AS n FROM import_plays WHERE import_id = '${id}'`);
+  const approve = (id: string) =>
+    handleImportRoutes(new Request(`${ORIGIN}/import/${id}/approve`, { method: "POST", headers: { Origin: ORIGIN }, body: new FormData() }), routeEnv(), {} as ExecutionContext, session);
+
+  it("expiring after a newer import was staged deletes none of its rows, and the newer import deletes no plays", async () => {
+    // The newer import B is read and waits for the owner.
+    const b = await uploaded();
+    await using instanceB = await introspectWorkflowInstance(env.IMPORT_WORKFLOW, b);
+    await instanceB.modify(async (m) => {
+      await m.disableSleeps();
+    });
+    await env.IMPORT_WORKFLOW.create({ id: b, params: { importId: b, attempt: 0 } });
+    await instanceB.waitForStepResult({ name: "email review" });
+    expect(await stagedFor(b)).toBe(4);
+
+    // An older import A's instance (never stopped) now times out waiting for its approval.
+    const a = crypto.randomUUID();
+    const files = [await putUpload(bucket, a, 1, "Streaming_History_Audio_2018_0.json", enc(exportJson([audioRecord({ ms: Date.UTC(2018, 3, 1), track: "old" })])))];
+    await insertImport(db, { id: a, status: "reading", files });
+    await using instanceA = await introspectWorkflowInstance(env.IMPORT_WORKFLOW, a);
+    await instanceA.modify(async (m) => {
+      await m.disableSleeps();
+      await m.forceEventTimeout({ name: "owner approval" });
+    });
+    await env.IMPORT_WORKFLOW.create({ id: a, params: { importId: a, attempt: 0 } });
+    await instanceA.waitForStatus("complete");
+    expect(await instanceA.getOutput()).toEqual({ status: "expired" });
+    expect((await getImport(db, a))?.status).toBe("expired");
+    // A's expiry removed A's rows only. (Before staging was scoped by import, it emptied the table,
+    // and B's apply then deleted every play in B's span.)
+    expect(await stagedFor(a)).toBe(0);
+    expect(await stagedFor(b)).toBe(4);
+
+    expect((await approve(b))?.headers.get("Location")).toBe("/import?ok=approved");
+    await instanceB.waitForStatus("complete");
+    expect((await getImport(db, b))?.status).toBe("done");
+    expect(await playsNow()).toEqual(expectedPlays);
+  });
+
+  it("an import whose staging lost rows after the review fails before applying anything", async () => {
+    const id = await uploaded();
+    await using instance = await introspectWorkflowInstance(env.IMPORT_WORKFLOW, id);
+    await instance.modify(async (m) => {
+      await m.disableSleeps();
+      await m.disableRetryDelays();
+    });
+    await env.IMPORT_WORKFLOW.create({ id, params: { importId: id, attempt: 0 } });
+    await instance.waitForStepResult({ name: "email review" });
+    const before = await playsNow();
+    await db.prepare("DELETE FROM import_plays WHERE rowid = (SELECT MIN(rowid) FROM import_plays WHERE import_id = ?1)").bind(id).run();
+
+    await approve(id);
+    await instance.waitForStatus("errored");
+    expect(await getImport(db, id)).toMatchObject({ status: "failed", error: STAGING_INCOMPLETE, applied_to: null });
+    expect(await playsNow()).toEqual(before);
+  });
+});
+
+describe("expireImport", () => {
+  const stage = (id: string) => db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri) VALUES (?1, 1, 'a', 'spotify:track:a')").bind(id).run();
+  const staged = (id: string) => count(db, `SELECT COUNT(*) AS n FROM import_plays WHERE import_id = '${id}'`);
+
+  it("expires an unapproved import in review, or already marked applying by the approve route", async () => {
+    await stage("other");
+    for (const status of ["review", "applying"]) {
+      const id = await insertImport(db, { status });
+      await stage(id);
+      expect(await expireImport(db, bucket, id, 0)).toBe(true);
+      expect((await getImport(db, id))?.status).toBe("expired");
+      expect(await staged(id)).toBe(0);
+      expect(await staged("other")).toBe(1);
+    }
+  });
+
+  it("leaves approved, cancelled and other attempts' imports alone", async () => {
+    const approved = await insertImport(db, { status: "applying", options: { liked: false, frequent: false } });
+    const cancelled = await insertImport(db, { status: "cancelled" });
+    const retried = await insertImport(db, { status: "review" });
+    await db.prepare("UPDATE imports SET attempt = 1 WHERE id = ?1").bind(retried).run();
+    for (const id of [approved, cancelled, retried]) {
+      await stage(id);
+      expect(await expireImport(db, bucket, id, 0)).toBe(false);
+      expect(await staged(id)).toBe(1);
+    }
+    expect((await getImport(db, approved))?.status).toBe("applying");
+    expect((await getImport(db, cancelled))?.status).toBe("cancelled");
+    expect((await getImport(db, retried))?.status).toBe("review");
   });
 });

@@ -24,6 +24,8 @@ export interface ApproveForm {
 export const DEFAULT_APPROVE_FORM: ApproveForm = { frequent: true, liked: false, likedConfirm: false, understand: false };
 
 const REFRESH_SECONDS = 5;
+/** An import that hasn't moved for this long offers Retry and Cancel (the routes act only once its Workflow stopped). */
+export const STUCK_MS = 30 * 60_000;
 
 const FLASH_OK: Record<string, string> = {
   started: "Upload complete. We're reading your export now and will email you when it's ready to review.",
@@ -34,6 +36,7 @@ const FLASH_OK: Record<string, string> = {
 const FLASH_ERROR: Record<string, string> = {
   moved: "That import has moved on; here's where it is now.",
   retry: "Couldn't restart the import. Try again in a minute.",
+  running: "The import is still running, so it can't be changed now. Try again in a minute.",
 };
 
 function flash(url: URL | undefined): Notice | undefined {
@@ -167,21 +170,23 @@ ${understand}
 
 // ---------------------------------------------------------------------------- other states
 
-function progressCard(title: string, row: ImportRow, cancellable: boolean, timeZone: string): string {
+function progressCard(title: string, row: ImportRow, cancellable: boolean, timeZone: string, now = Date.now()): string {
   const entries = Object.values(row.entries);
   const read = entries.filter((e) => e.done).length;
   const facts: Array<[string, string]> = [["Status", row.progress ?? "Starting"]];
   if (row.status === "reading" && entries.length) facts.push(["Files read", `${read} of ${entries.length}`]);
   facts.push(["Updated", when(row.updated_at, timeZone)]);
-  return ui.card(
-    title,
-    `${ui.facts(facts)}<p class="note">This page refreshes itself. You can close it: we'll email you when ${row.status === "applying" ? "it's done" : "it's ready to review"}.</p>`,
-    {
-      id: "progress",
-      headHtml: ui.pill("neutral", "In progress"),
-      actionsHtml: cancellable ? ui.postButton(`/import/${row.id}/cancel`, "Cancel import", { variant: "danger" }) : undefined,
-    },
-  );
+  // Applying can't be cancelled while it runs; if it stopped without finishing, retry or discard it.
+  const stuck = row.status === "applying" && now - row.updated_at > STUCK_MS;
+  const note = stuck
+    ? `<p class="note">No progress for a while. If it stopped, Retry picks up where it stopped; Cancel keeps the months already imported and discards the rest.</p>`
+    : `<p class="note">This page refreshes itself. You can close it: we'll email you when ${row.status === "applying" ? "it's done" : "it's ready to review"}.</p>`;
+  const actions = stuck
+    ? ui.postButton(`/import/${row.id}/retry`, "Retry", { variant: "primary" }) + ui.postButton(`/import/${row.id}/cancel`, "Cancel import", { variant: "danger" })
+    : cancellable
+      ? ui.postButton(`/import/${row.id}/cancel`, "Cancel import", { variant: "danger" })
+      : undefined;
+  return ui.card(title, `${ui.facts(facts)}${note}`, { id: "progress", headHtml: ui.pill(stuck ? "warn" : "neutral", stuck ? "No progress" : "In progress"), actionsHtml: actions });
 }
 
 function failedCard(row: ImportRow): string {
@@ -239,7 +244,8 @@ export async function importPage(env: Env, db: D1Database, session: Session, opt
     case "reading":
       return page(progressCard("Reading your export", row, true, values.timeZone), { refresh: true });
     case "applying":
-      return page(progressCard("Importing", row, false, values.timeZone), { refresh: true });
+      // A stuck import offers buttons instead, so the page stops refreshing under them.
+      return page(progressCard("Importing", row, false, values.timeZone), { refresh: Date.now() - row.updated_at <= STUCK_MS });
     case "review":
       if (row.preview) {
         return page(reviewBody(row, row.preview, opts.form ?? DEFAULT_APPROVE_FORM, opts.errors ?? [], { liked: values.liked, frequent: values.frequent }));

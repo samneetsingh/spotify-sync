@@ -61,10 +61,10 @@ describe("D1 schema migration", () => {
       "preview", "options", "applied_to", "progress", "error", "attempt",
     ]);
     expect(await columns("import_plays")).toEqual([
-      "played_at_ms", "track_id", "track_uri", "name", "artists", "album", "explicit", ...EXPORT_PLAY_FIELDS.map(([name]) => name),
+      "import_id", "played_at_ms", "track_id", "track_uri", "name", "artists", "album", "explicit", ...EXPORT_PLAY_FIELDS.map(([name]) => name),
     ]);
     const pk = await env.DB.prepare("SELECT name FROM pragma_table_info('import_plays') WHERE pk > 0 ORDER BY pk").all<{ name: string }>();
-    expect(pk.results.map((c) => c.name)).toEqual(["played_at_ms", "track_id"]);
+    expect(pk.results.map((c) => c.name)).toEqual(["import_id", "played_at_ms", "track_id"]);
   });
 
   describe("v12 (settings replace deploy vars; the env-free part)", () => {

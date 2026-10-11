@@ -1,6 +1,8 @@
 // The import Workflow. Every step is idempotent, so a replay or
 // a retry instance (`<id>-r<attempt>`) resumes where the last one stopped: staged entries are
 // skipped, applied months are guarded by `applied_to`, enrichment only selects rows still missing.
+// Staging rows are scoped to their import, and the steps that end an import (expire, finish, fail)
+// only act for the current attempt, so a leftover instance can't touch a later import or attempt.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
@@ -13,7 +15,7 @@ import { loadSettings } from "../settings";
 import { SpotifyClient } from "../spotify/client";
 import { doneEmail, failedEmail, reviewEmail, sendImportEmail, spanText, type DoneSummary } from "./emails";
 import { enrichArtists, enrichTracks } from "./enrich";
-import { applySlice, buildPreview, monthSlices, previewSlice, spanOf, yearSlices, type Span, type YearPreview } from "./reconcile";
+import { applySlice, buildPreview, checkStaged, monthSlices, previewSlice, spanOf, STAGING_INCOMPLETE, yearSlices, type Span, type YearPreview } from "./reconcile";
 import { deleteUpload, indexImport, stageEntry } from "./stage";
 import { getImport, setProgress, type ImportOptions, type Preview, type StageEntry } from "./store";
 import { ImportError, NOT_EXTENDED_HISTORY } from "./zip";
@@ -70,7 +72,10 @@ async function stagedState(db: D1Database, importId: string): Promise<StagedStat
   if (row.span_from === null || row.span_to === null) throw new ImportError(NOT_EXTENDED_HISTORY);
   const entries = Object.values(row.entries);
   const sum = (k: "records" | "skipped" | "short" | "plays") => entries.reduce((s, e) => s + (e[k] ?? 0), 0);
-  const plays = (await db.prepare("SELECT COUNT(*) AS n FROM import_plays").first<{ n: number }>())?.n ?? 0;
+  const plays = (await db.prepare("SELECT COUNT(*) AS n FROM import_plays WHERE import_id = ?1").bind(importId).first<{ n: number }>())?.n ?? 0;
+  // Before any month is applied, every entry's plays are staged (duplicates across entries only
+  // merge), so fewer rows than the largest entry means staging rows went missing.
+  if (row.applied_to === null && plays < Math.max(0, ...entries.map((e) => e.plays ?? 0))) throw new ImportError(STAGING_INCOMPLETE);
   return {
     span: spanOf(row.span_from, row.span_to),
     stats: { records: sum("records"), skipped: sum("skipped"), short: sum("short"), plays },
@@ -111,13 +116,23 @@ async function recordApproval(db: D1Database, importId: string, options: ImportO
   return stored;
 }
 
-async function expireImport(db: D1Database, bucket: R2Bucket, importId: string): Promise<void> {
-  await db.batch([
-    db.prepare("DELETE FROM import_plays"),
-    db.prepare("UPDATE imports SET status = 'expired', progress = 'The review expired after 7 days', updated_at = ?2 WHERE id = ?1 AND status = 'review'").bind(importId, Date.now()),
+/** Still waiting for approval, in this attempt: the only state an expiry may end. */
+const UNAPPROVED = "id = ?1 AND attempt = ?2 AND options IS NULL AND status IN ('review', 'applying')";
+
+/**
+ * No approval within 7 days: drops this import's staging rows and marks it expired. Only while it's
+ * this attempt's and unapproved (`applying` too: the route marks it so right after sending the
+ * event, which may arrive too late). Returns whether it expired.
+ */
+export async function expireImport(db: D1Database, bucket: R2Bucket, importId: string, attempt: number, now = Date.now()): Promise<boolean> {
+  const [, res] = await db.batch([
+    db.prepare(`DELETE FROM import_plays WHERE import_id = ?1 AND EXISTS (SELECT 1 FROM imports WHERE ${UNAPPROVED})`).bind(importId, attempt),
+    db.prepare(`UPDATE imports SET status = 'expired', progress = 'The review expired after 7 days', updated_at = ?3 WHERE ${UNAPPROVED}`).bind(importId, attempt, now),
   ]);
+  if (!res!.meta.changes) return false;
   await deleteUpload(bucket, importId);
   await quietly("activity", () => logActivity(db, "import", "History import expired: not approved within 7 days", false));
+  return true;
 }
 
 export interface LibraryStep {
@@ -148,10 +163,11 @@ async function finishImport(
   db: D1Database,
   bucket: R2Bucket,
   importId: string,
+  attempt: number,
   options: ApprovedOptions,
   library: { liked: number; frequent: number; skipped: string | null } | null,
   now = Date.now(),
-): Promise<DoneSummary> {
+): Promise<DoneSummary | null> {
   const row = await getImport(db, importId);
   const p = row?.preview;
   if (!row || !p) throw new Error("import row or preview missing at finish");
@@ -169,22 +185,26 @@ async function finishImport(
     librarySkipped: library?.skipped ?? null,
   };
   const line = `History imported (${spanText(p.from, p.to)}): +${summary.added} / ~${summary.updated} / -${summary.removed}`;
-  // Only one import is open at a time, so any staging rows left are this one's.
-  await db.batch([
-    db.prepare("DELETE FROM import_plays"),
-    db.prepare("UPDATE imports SET status = 'done', progress = ?2, error = NULL, updated_at = ?3 WHERE id = ?1").bind(importId, line, now),
+  const current = "id = ?1 AND attempt = ?2 AND status = 'applying'";
+  const [, res] = await db.batch([
+    db.prepare(`DELETE FROM import_plays WHERE import_id = ?1 AND EXISTS (SELECT 1 FROM imports WHERE ${current})`).bind(importId, attempt),
+    db.prepare(`UPDATE imports SET status = 'done', progress = ?3, error = NULL, updated_at = ?4 WHERE ${current}`).bind(importId, attempt, line, now),
   ]);
+  if (!res!.meta.changes) return null; // not this attempt's (or not applying) anymore: nothing to report
   await deleteUpload(bucket, importId);
   await quietly("activity", () => logActivity(db, "import", line));
   return summary;
 }
 
-async function failImport(db: D1Database, importId: string, message: string, now = Date.now()): Promise<void> {
-  await db
-    .prepare("UPDATE imports SET status = 'failed', error = ?2, progress = NULL, updated_at = ?3 WHERE id = ?1 AND status IN ('reading', 'review', 'applying')")
-    .bind(importId, message, now)
+/** Marks this attempt failed; false when the import moved on (cancelled, retried, done), so nobody is emailed. */
+async function failImport(db: D1Database, importId: string, attempt: number, message: string, now = Date.now()): Promise<boolean> {
+  const res = await db
+    .prepare("UPDATE imports SET status = 'failed', error = ?2, progress = NULL, updated_at = ?3 WHERE id = ?1 AND attempt = ?4 AND status IN ('reading', 'review', 'applying')")
+    .bind(importId, message, now, attempt)
     .run();
+  if (!res.meta.changes) return false;
   await quietly("activity", () => logActivity(db, "import", "History import failed", false, message));
+  return true;
 }
 
 /** The error for the owner: a step's NonRetryableError arrives as "NonRetryableError: <message>". */
@@ -193,7 +213,7 @@ const errorMessage = (err: unknown): string => (err instanceof Error ? err.messa
 /** Index, stage, preview, wait for approval, apply month by month, enrich, backfill, finish. */
 export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
   async run(event: Readonly<WorkflowEvent<ImportParams>>, step: WorkflowStep): Promise<ImportOutcome> {
-    const { importId } = event.payload;
+    const { importId, attempt } = event.payload;
     const env = this.env;
     const db = env.DB;
     if (!env.IMPORTS) throw new NonRetryableError("The IMPORTS bucket isn't bound");
@@ -214,7 +234,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
       let options = staged.options;
       if (!options) {
         const years: YearPreview[] = [];
-        for (const y of yearSlices(staged.span)) years.push(await step.do(`preview ${y.year}`, D1_STEP, () => previewSlice(db, y)));
+        for (const y of yearSlices(staged.span)) years.push(await step.do(`preview ${y.year}`, D1_STEP, () => previewSlice(db, importId, y)));
         const preview = await step.do("review", D1_STEP, () => openReview(db, importId, buildPreview(staged.span, staged.stats, years)));
         await step.do("email review", ONCE, () => sendImportEmail(env, db, reviewEmail(preview, env.PUBLIC_URL)));
         let approval: ImportOptions;
@@ -222,7 +242,7 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
           approval = normalizeOptions((await step.waitForEvent<ImportOptions>("owner approval", { type: APPROVE_EVENT, timeout: APPROVAL_TIMEOUT })).payload);
         } catch {
           // waitForEvent only rejects when the timeout passes.
-          await step.do("expire", D1_STEP, () => expireImport(db, bucket, importId));
+          await step.do("expire", D1_STEP, () => expireImport(db, bucket, importId, attempt));
           return { status: "expired" };
         }
         options = await step.do("approved", D1_STEP, guarded(() => recordApproval(db, importId, approval)));
@@ -230,7 +250,9 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
 
       const approved: ApprovedOptions = options;
 
-      // Apply: one UTC month per step, each an atomic batch guarded by applied_to.
+      // Apply: one UTC month per step, each an atomic batch guarded by applied_to, after checking
+      // that staging still holds every play the review counted.
+      await step.do("check staging", D1_STEP, guarded(() => checkStaged(db, importId)));
       const months = monthSlices(staged.span);
       for (const [k, m] of months.entries()) {
         await step.do(`apply ${m.label}`, D1_STEP, () => applySlice(db, importId, m, `Imported ${m.label} (month ${k + 1} of ${months.length})`));
@@ -268,13 +290,13 @@ export class ImportWorkflow extends WorkflowEntrypoint<Env, ImportParams> {
         }
       }
 
-      const summary = await step.do("finish", D1_STEP, () => finishImport(db, bucket, importId, approved, library));
-      await step.do("email done", ONCE, () => sendImportEmail(env, db, doneEmail(summary, env.PUBLIC_URL)));
+      const summary = await step.do("finish", D1_STEP, () => finishImport(db, bucket, importId, attempt, approved, library));
+      if (summary) await step.do("email done", ONCE, () => sendImportEmail(env, db, doneEmail(summary, env.PUBLIC_URL)));
       return { status: "done" };
     } catch (err) {
       const message = errorMessage(err);
-      await step.do("record failure", D1_STEP, () => failImport(db, importId, message));
-      await step.do("email failure", ONCE, () => sendImportEmail(env, db, failedEmail(message, env.PUBLIC_URL)));
+      const failed = await step.do("record failure", D1_STEP, () => failImport(db, importId, attempt, message));
+      if (failed) await step.do("email failure", ONCE, () => sendImportEmail(env, db, failedEmail(message, env.PUBLIC_URL)));
       throw err;
     }
   }

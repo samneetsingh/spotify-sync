@@ -269,7 +269,7 @@ async function addToLiked(sp: SpotifyClient, trackIds: string[], batchSize: numb
   return added;
 }
 
-/** Port of _sync_frequent_playlist after candidate selection: skip cached, respect the 10k cap, add, mark. */
+/** Port of _sync_frequent_playlist after candidate selection: skip cached, respect the 10k cap, add and mark each batch. */
 async function addToFrequent(
   cfg: Config,
   db: D1Database,
@@ -297,8 +297,10 @@ async function addToFrequent(
   for (const batch of chunkArray(candidates, cfg.addBatchSize)) {
     await sp.addToPlaylist(playlistId, batch.map((c) => c.track_uri));
     added += batch.length;
+    // Recorded as soon as Spotify took it: if a later batch fails, a retried step (the import's
+    // backfill) or the next sync skips these instead of adding duplicates.
+    if (writesState(cfg) && !placeholder) await runAll(db, markTracksInPlaylist(db, playlistId, batch));
   }
-  if (added && writesState(cfg) && !placeholder) await runAll(db, markTracksInPlaylist(db, playlistId, candidates));
   return added;
 }
 

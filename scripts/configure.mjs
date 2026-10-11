@@ -27,7 +27,8 @@ export const DEFAULTS = {};
  * still has (even empty) is written to [vars] (`# {{LEGACY_VARS}}`), and to [env.test.vars]
  * (`# {{LEGACY_TEST_VARS}}`) except AI_EDITOR, so an existing instance can deploy this version with
  * its old config: the Worker copies them into D1 once (importLegacyConfig in src/runtime.ts). Then
- * remove them from the deploy config; nothing changes.
+ * remove them from the deploy config; nothing changes. Keys a config leaves out aren't rendered;
+ * the Worker reads an absent playlist id as "" (off), which is what the old template defaulted to.
  */
 export const LEGACY_KEYS = [
   "SPOTIFY_USER_ID",

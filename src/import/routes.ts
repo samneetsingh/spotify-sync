@@ -99,26 +99,75 @@ async function openImports(db: D1Database): Promise<Array<{ id: string; status: 
   return results;
 }
 
+/** Workflow statuses after which an instance never runs another step. */
+const FINISHED: readonly string[] = ["complete", "errored", "terminated"];
+
 /**
- * Throws away an import before it was applied (or after it failed): stops its Workflow, aborts
- * unfinished uploads, deletes its R2 objects and the staging rows. Months already applied stay.
+ * The status of an import attempt's Workflow instance: "none" if it was never created, "finished"
+ * if it will never run another step, else "running" (queued, running, waiting, paused...).
  */
-export async function discardImport(c: Pick<Ctx, "db" | "bucket" | "workflow">, row: ImportRow, why: string): Promise<void> {
-  if (row.status !== "uploading") {
-    try {
-      await (await c.workflow.get(instanceId(row.id, row.attempt))).terminate();
-    } catch {
-      // Not created, or already finished/errored: nothing to stop.
-    }
+export async function instanceState(workflow: Workflow<ImportParams>, id: string): Promise<"none" | "finished" | "running"> {
+  let instance: WorkflowInstance;
+  try {
+    instance = await workflow.get(id);
+  } catch (err) {
+    if (/not.?found/i.test(err instanceof Error ? err.message : String(err))) return "none";
+    throw err;
   }
+  return FINISHED.includes((await instance.status()).status) ? "finished" : "running";
+}
+
+/**
+ * Stops an attempt's instance and confirms it stopped: true when nothing can run for it anymore.
+ * False (the caller refuses to go on) while it's still running, so a leftover instance can never
+ * keep working on an import the owner thinks is gone.
+ */
+export async function stopInstance(workflow: Workflow<ImportParams>, id: string): Promise<boolean> {
+  if ((await instanceState(workflow, id)) !== "running") return true;
+  try {
+    await (await workflow.get(id)).terminate();
+  } catch (err) {
+    console.error(JSON.stringify({ import: "terminate failed", instance: id, error: err instanceof Error ? err.message : String(err) }));
+  }
+  return (await instanceState(workflow, id)) !== "running";
+}
+
+/**
+ * Creates an attempt's instance (deterministic id: instanceId). A create can fail after the
+ * instance exists (e.g. a timeout); if it's running then, it counts as started. Returns the error,
+ * or null when it runs.
+ */
+async function createInstance(workflow: Workflow<ImportParams>, importId: string, attempt: number): Promise<string | null> {
+  const id = instanceId(importId, attempt);
+  try {
+    await workflow.create({ id, params: { importId, attempt } });
+    return null;
+  } catch (err) {
+    const state = await instanceState(workflow, id).catch(() => "none" as const);
+    return state === "running" ? null : err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
+ * Throws away an import before it was applied (or after it failed or stopped): stops its Workflow,
+ * aborts unfinished uploads, deletes its R2 objects and its staging rows. Months already applied
+ * stay. Returns false, changing nothing, while its Workflow instance can't be confirmed stopped.
+ */
+export async function discardImport(c: Pick<Ctx, "db" | "bucket" | "workflow">, row: ImportRow, why: string): Promise<boolean> {
+  if (row.status !== "uploading" && !(await stopInstance(c.workflow, instanceId(row.id, row.attempt)))) return false;
   await setStatus(c.db, row.id, "cancelled", why);
   for (const f of row.files.filter((f) => !f.done)) {
     await c.bucket.resumeMultipartUpload(f.key, f.uploadId).abort().catch(() => {});
   }
   await deleteUpload(c.bucket, row.id);
-  // Only one import is open at a time, so all staging rows are this one's.
-  await c.db.prepare("DELETE FROM import_plays").run();
+  await c.db.prepare("DELETE FROM import_plays WHERE import_id = ?1").bind(row.id).run();
   await quietly("activity", () => logActivity(c.db, "import", `History import cancelled: ${why}`));
+  return true;
+}
+
+/** An `applying` import whose Workflow instance stopped (or never ran): cancel and retry may act on it. */
+async function stuckApplying(c: Ctx, row: ImportRow): Promise<boolean> {
+  return row.status === "applying" && (await instanceState(c.workflow, instanceId(row.id, row.attempt))) !== "running";
 }
 
 /** POST /import/new: a fresh import in `uploading`. An unfinished upload is replaced; anything further along blocks. */
@@ -126,7 +175,7 @@ async function createImport(c: Ctx): Promise<Response> {
   for (const open of await openImports(c.db)) {
     if (open.status !== "uploading") return fail(409, "Another import is in progress. Open the Import page to continue or cancel it.");
     const row = await getImport(c.db, open.id);
-    if (row) await discardImport(c, row, "replaced by a new upload");
+    if (row && !(await discardImport(c, row, "replaced by a new upload"))) return fail(409, "Another import is still stopping. Try again in a minute.");
   }
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -224,11 +273,9 @@ async function start(c: Ctx, id: string): Promise<Response> {
   if (!row.files.length || row.files.some((f) => !f.done)) return fail(400, "Some files haven't finished uploading.");
   if ((await openImports(c.db)).some((o) => o.id !== id)) return fail(409, "Another import is in progress.");
   if (!(await setStatus(c.db, id, "reading", "Starting", { onlyFrom: ["uploading"] }))) return fail(409, "This upload has ended. Reload the page.");
-  try {
-    await c.workflow.create({ id: instanceId(id, row.attempt), params: { importId: id, attempt: row.attempt } });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await setStatus(c.db, id, "failed", null, { error: `Couldn't start the import: ${message}`.slice(0, 500) });
+  const error = await createInstance(c.workflow, id, row.attempt);
+  if (error) {
+    await setStatus(c.db, id, "failed", null, { error: `Couldn't start the import: ${error}`.slice(0, 500) });
     return fail(500, "Couldn't start the import. Open the Import page to retry.");
   }
   const mb = Math.round(row.files.reduce((s, f) => s + f.size, 0) / MiB);
@@ -264,29 +311,37 @@ async function approve(c: Ctx, request: Request, id: string, session: Session): 
   return redirect303("/import?ok=approved");
 }
 
-/** POST /import/:id/cancel: before approval (or after a failure) only. */
+/**
+ * POST /import/:id/cancel: before approval, after a failure, or when an `applying` import's
+ * Workflow stopped without finishing (months already applied stay). Refused while its Workflow
+ * can't be confirmed stopped.
+ */
 async function cancel(c: Ctx, id: string): Promise<Response> {
   const row = await getImport(c.db, id);
-  if (!row || !CANCELLABLE.includes(row.status)) return redirect303("/import?err=moved");
-  await discardImport(c, row, row.status === "failed" ? "discarded after it stopped" : "cancelled by you");
+  if (!row || !(CANCELLABLE.includes(row.status) || (await stuckApplying(c, row)))) return redirect303("/import?err=moved");
+  const why = row.status === "failed" || row.status === "applying" ? "discarded after it stopped" : "cancelled by you";
+  if (!(await discardImport(c, row, why))) return redirect303("/import?err=running");
   return redirect303("/import?ok=cancelled");
 }
 
-/** POST /import/:id/retry: a failed import runs again as a new Workflow instance and resumes. */
+/**
+ * POST /import/:id/retry: a failed import (or an `applying` one whose Workflow stopped) runs again
+ * as a new Workflow instance and resumes. The previous attempt's instance must be stopped first.
+ */
 async function retry(c: Ctx, id: string): Promise<Response> {
   const row = await getImport(c.db, id);
-  if (!row || row.status !== "failed") return redirect303("/import?err=moved");
+  if (!row || !(row.status === "failed" || (await stuckApplying(c, row)))) return redirect303("/import?err=moved");
+  if (!(await stopInstance(c.workflow, instanceId(id, row.attempt)))) return redirect303("/import?err=running");
   const attempt = row.attempt + 1;
   const status = row.options ? "applying" : "reading";
   const res = await c.db
-    .prepare("UPDATE imports SET attempt = ?2, status = ?3, error = NULL, progress = 'Retrying', updated_at = ?4 WHERE id = ?1 AND status = 'failed'")
-    .bind(id, attempt, status, Date.now())
+    .prepare("UPDATE imports SET attempt = ?2, status = ?3, error = NULL, progress = 'Retrying', updated_at = ?4 WHERE id = ?1 AND attempt = ?5 AND status = ?6")
+    .bind(id, attempt, status, Date.now(), row.attempt, row.status)
     .run();
   if (!res.meta.changes) return redirect303("/import?err=moved");
-  try {
-    await c.workflow.create({ id: instanceId(id, attempt), params: { importId: id, attempt } });
-  } catch (err) {
-    await setStatus(c.db, id, "failed", null, { error: `Couldn't restart the import: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) });
+  const error = await createInstance(c.workflow, id, attempt);
+  if (error) {
+    await setStatus(c.db, id, "failed", null, { error: `Couldn't restart the import: ${error}`.slice(0, 500) });
     return redirect303("/import?err=retry");
   }
   await quietly("activity", () => logActivity(c.db, "import", `History import retried (attempt ${attempt + 1})`));

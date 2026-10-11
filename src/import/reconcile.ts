@@ -1,10 +1,12 @@
 // Preview and apply in SQL: the same diff as planReconcile (src/import/plan.ts), computed against the
-// staging table one UTC year (preview) or month (apply) at a time so every query stays small.
+// staging table one UTC year (preview) or month (apply) at a time so every query stays small. Every
+// query reads only the given import's staging rows (import_plays.import_id).
 
 import { EXPORT_PLAY_FIELDS } from "../db/schema";
 import { SPAN_TAIL_MS } from "./parse";
 import type { DiffCounts } from "./plan";
 import type { Preview } from "./store";
+import { ImportError } from "./zip";
 
 /** Warn when fewer than this share of the live sync's plays in the span have a twin in the export. */
 export const MISMATCH_MIN_SYNCED = 20;
@@ -59,33 +61,33 @@ export interface YearPreview {
   importedDeletes: number;
 }
 
-/** The diff for one slice (a year), read-only: inserts, updates and deletes per month, plus the warning inputs. */
-export async function previewSlice(db: D1Database, slice: Span): Promise<YearPreview> {
+/** The diff for one slice (a year) of `importId`, read-only: inserts, updates and deletes per month, plus the warning inputs. */
+export async function previewSlice(db: D1Database, importId: string, slice: Span): Promise<YearPreview> {
   const [ins, upd, del, synced, imported] = await db.batch<{ m?: string; n: number; h?: number; matched?: number }>([
     db
       .prepare(
-        `SELECT ${MONTH} AS m, COUNT(*) AS n FROM import_plays i WHERE played_at_ms >= ?1 AND played_at_ms < ?2
+        `SELECT ${MONTH} AS m, COUNT(*) AS n FROM import_plays i WHERE i.import_id = ?3 AND played_at_ms >= ?1 AND played_at_ms < ?2
            AND NOT EXISTS (SELECT 1 FROM plays p WHERE p.played_at_ms = i.played_at_ms AND p.track_id = i.track_id) GROUP BY m`,
       )
-      .bind(slice.from, slice.to),
+      .bind(slice.from, slice.to, importId),
     db
       .prepare(
-        `SELECT ${MONTH} AS m, COUNT(*) AS n FROM import_plays i WHERE played_at_ms >= ?1 AND played_at_ms < ?2
+        `SELECT ${MONTH} AS m, COUNT(*) AS n FROM import_plays i WHERE i.import_id = ?3 AND played_at_ms >= ?1 AND played_at_ms < ?2
            AND EXISTS (SELECT 1 FROM plays p WHERE p.played_at_ms = i.played_at_ms AND p.track_id = i.track_id AND p.ms_played IS NULL) GROUP BY m`,
       )
-      .bind(slice.from, slice.to),
+      .bind(slice.from, slice.to, importId),
     db
       .prepare(
         `SELECT ${MONTH} AS m, COUNT(*) AS n, SUM(source = 'history_import') AS h FROM plays p WHERE played_at_ms >= ?1 AND played_at_ms < ?2
-           AND NOT EXISTS (SELECT 1 FROM import_plays i WHERE i.played_at_ms = p.played_at_ms AND i.track_id = p.track_id) GROUP BY m`,
+           AND NOT EXISTS (SELECT 1 FROM import_plays i WHERE i.import_id = ?3 AND i.played_at_ms = p.played_at_ms AND i.track_id = p.track_id) GROUP BY m`,
       )
-      .bind(slice.from, slice.to),
+      .bind(slice.from, slice.to, importId),
     db
       .prepare(
-        `SELECT COUNT(*) AS n, COALESCE(SUM(EXISTS (SELECT 1 FROM import_plays i WHERE i.played_at_ms BETWEEN p.played_at_ms - ?3 AND p.played_at_ms + ?3 AND i.track_id = p.track_id)), 0) AS matched
+        `SELECT COUNT(*) AS n, COALESCE(SUM(EXISTS (SELECT 1 FROM import_plays i WHERE i.import_id = ?4 AND i.played_at_ms BETWEEN p.played_at_ms - ?3 AND p.played_at_ms + ?3 AND i.track_id = p.track_id)), 0) AS matched
            FROM plays p WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2 AND p.source = 'recently_played'`,
       )
-      .bind(slice.from, slice.to, TWIN_WINDOW_MS),
+      .bind(slice.from, slice.to, TWIN_WINDOW_MS, importId),
     db.prepare("SELECT COUNT(*) AS n FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2 AND source = 'history_import'").bind(slice.from, slice.to),
   ]);
   const months: Record<string, DiffCounts> = {};
@@ -141,18 +143,19 @@ const FIELDS = EXPORT_PLAY_FIELDS.map(([name]) => name);
 // whole month: its staging rows are gone by then.
 const GUARD = "EXISTS (SELECT 1 FROM imports WHERE id = ?3 AND status = 'applying' AND COALESCE(applied_to, 0) < ?2)";
 
+// Staging rows are this import's only (?3 is the import id).
 const APPLY_SQL = [
   // Tracks first: plays reference them (D1 enforces foreign keys). Existing tracks are untouched.
   `INSERT OR IGNORE INTO tracks (track_id, track_uri, name, artists, album, explicit)
    SELECT track_id, track_uri, name, artists, album, explicit FROM import_plays
-   WHERE played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD} GROUP BY track_id`,
+   WHERE import_id = ?3 AND played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD} GROUP BY track_id`,
   `INSERT INTO plays (played_at_ms, track_id, track_uri, source, ${FIELDS.join(", ")})
    SELECT played_at_ms, track_id, track_uri, 'history_import', ${FIELDS.join(", ")} FROM import_plays
-   WHERE played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD}
+   WHERE import_id = ?3 AND played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD}
    ON CONFLICT (played_at_ms, track_id) DO UPDATE SET ${FIELDS.map((f) => `${f} = excluded.${f}`).join(", ")} WHERE plays.ms_played IS NULL`,
   `DELETE FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD}
-   AND NOT EXISTS (SELECT 1 FROM import_plays i WHERE i.played_at_ms = plays.played_at_ms AND i.track_id = plays.track_id)`,
-  `DELETE FROM import_plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD}`,
+   AND NOT EXISTS (SELECT 1 FROM import_plays i WHERE i.import_id = ?3 AND i.played_at_ms = plays.played_at_ms AND i.track_id = plays.track_id)`,
+  `DELETE FROM import_plays WHERE import_id = ?3 AND played_at_ms >= ?1 AND played_at_ms < ?2 AND ${GUARD}`,
   `UPDATE imports SET applied_to = ?2, progress = ?4, updated_at = ?5 WHERE id = ?3 AND status = 'applying' AND COALESCE(applied_to, 0) < ?2`,
 ];
 
@@ -176,4 +179,23 @@ export async function applySlice(db: D1Database, importId: string, slice: Span, 
   const changes = (i: number) => results[i]?.meta.changes ?? 0;
   if (!changes(4)) return { skipped: true, written: 0, deleted: 0 };
   return { skipped: false, written: changes(1), deleted: changes(2) };
+}
+
+export const STAGING_INCOMPLETE =
+  "Part of your export went missing between the review and the import, so nothing was changed. Discard this import and upload the export again.";
+
+/**
+ * Before the first month is applied: this import's staging rows must be exactly the plays the
+ * review counted (Preview.plays). The apply deletes every play in a month that has no staged twin,
+ * so applying incomplete staging would delete history. Later months (a retry after some were
+ * applied) have already consumed their rows, so the check runs only while nothing is applied.
+ */
+export async function checkStaged(db: D1Database, importId: string): Promise<void> {
+  const row = await db
+    .prepare("SELECT applied_to, json_extract(preview, '$.plays') AS expected, (SELECT COUNT(*) FROM import_plays WHERE import_id = ?1) AS staged FROM imports WHERE id = ?1")
+    .bind(importId)
+    .first<{ applied_to: number | null; expected: number | null; staged: number }>();
+  if (!row) throw new ImportError("This import was cancelled.");
+  if (row.applied_to !== null) return;
+  if (row.expected === null || row.staged !== row.expected) throw new ImportError(STAGING_INCOMPLETE);
 }

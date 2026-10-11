@@ -107,7 +107,7 @@ async function dashboardOutcome(fileTexts: string[], names: string[]) {
   const row = (await db.prepare("SELECT span_from, span_to FROM imports WHERE id = ?1").bind(id).first<{ span_from: number; span_to: number }>())!;
   const span = spanOf(row.span_from, row.span_to);
   const years = [];
-  for (const y of yearSlices(span)) years.push(await previewSlice(db, y));
+  for (const y of yearSlices(span)) years.push(await previewSlice(db, id, y));
   const preview = buildPreview(span, { records: 0, skipped: 0, short: 0, plays: 0 }, years);
   await db.prepare("UPDATE imports SET status = 'applying' WHERE id = ?1").bind(id).run();
   for (const m of monthSlices(span)) await applySlice(db, id, m, `applied ${m.label}`);
@@ -180,7 +180,7 @@ describe("staging", () => {
   });
 
   it("clears staging rows an abandoned import left behind, once", async () => {
-    await db.prepare("INSERT INTO import_plays (played_at_ms, track_id, track_uri) VALUES (1, 'old', 'spotify:track:old')").run();
+    await db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri) VALUES ('gone', 1, 'old', 'spotify:track:old')").run();
     const { id, entries } = await stageAll([["Streaming_History_Audio_0.json", exportJson([audioRecord({ ms: ms(1), track: "a" })])]]);
     expect(await count(db, "SELECT COUNT(*) AS n FROM import_plays")).toBe(0);
     await stageEntry(db, bucket, id, entries[0]!, 1);
@@ -197,7 +197,7 @@ describe("apply", () => {
     const id = await insertImport(db, { status: "applying", spanFrom: t(1), spanTo: t(28) });
     await db.batch(
       rows.map(([ms, track, msPlayed]) =>
-        db.prepare("INSERT INTO import_plays (played_at_ms, track_id, track_uri, name, ms_played, platform) VALUES (?1, ?2, 'spotify:track:' || ?2, 'Staged', ?3, 'ios')").bind(ms, track, msPlayed),
+        db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri, name, ms_played, platform) VALUES (?4, ?1, ?2, 'spotify:track:' || ?2, 'Staged', ?3, 'ios')").bind(ms, track, msPlayed, id),
       ),
     );
     return id;
@@ -261,11 +261,11 @@ describe("preview warnings", () => {
     await seedDb(Array.from({ length: 25 }, (_, i) => ({ ms: base + i * 3_600_000, track: `s${i}`, source: "recently_played", msPlayed: null })));
     await db.batch(
       Array.from({ length: 25 }, (_, i) =>
-        db.prepare("INSERT INTO import_plays (played_at_ms, track_id, track_uri, ms_played) VALUES (?1, ?2, 'x', 60000)").bind(base + i * 3_600_000 - 2_000, i < 5 ? `s${i}` : `other${i}`),
+        db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri, ms_played) VALUES ('imp', ?1, ?2, 'x', 60000)").bind(base + i * 3_600_000 - 2_000, i < 5 ? `s${i}` : `other${i}`),
       ),
     );
     const span = { from: base - 10_000, to: base + 30 * 3_600_000 };
-    const preview = buildPreview(span, { records: 25, skipped: 0, short: 0, plays: 25 }, [await previewSlice(db, span)]);
+    const preview = buildPreview(span, { records: 25, skipped: 0, short: 0, plays: 25 }, [await previewSlice(db, "imp", span)]);
     expect(preview.warnings).toEqual({ accountMismatch: { synced: 25, matched: 5 } });
   });
 
@@ -273,7 +273,7 @@ describe("preview warnings", () => {
     const base = Date.UTC(2021, 0, 1);
     await seedDb(Array.from({ length: 150 }, (_, i) => ({ ms: base + i * 60_000, track: "h", source: "history_import", msPlayed: 60_000 })));
     const span = { from: base, to: base + 200 * 60_000 };
-    const preview = buildPreview(span, { records: 0, skipped: 0, short: 0, plays: 0 }, [await previewSlice(db, span)]);
+    const preview = buildPreview(span, { records: 0, skipped: 0, short: 0, plays: 0 }, [await previewSlice(db, "imp", span)]);
     expect(preview.warnings).toEqual({ historyLoss: { deletes: 150, imported: 150 } });
     expect(preview.totals).toEqual([0, 0, 150]);
   });

@@ -3,19 +3,20 @@
 
 import { EXPORT_PLAY_FIELDS } from "../db/schema";
 import { ExportCollector, parseRecordsText } from "./parse";
-import { setProgress, type ImportFile, type StageEntry } from "./store";
+import { OPEN_STATUSES, setProgress, type ImportFile, type StageEntry } from "./store";
 import { ImportError, MAX_ENTRY_BYTES, NOT_EXTENDED_HISTORY, audioEntries, listZipEntries, r2Source, readTextLimited, zipEntryStream } from "./zip";
 
 /** Rows per staging statement: one bound JSON array expanded with json_each (D1: <= 100 bound parameters). */
 const STAGE_CHUNK = 500;
 
-/** import_plays columns, in the order of each staged row array. */
+/** import_plays columns after import_id, in the order of each staged row array. */
 export const STAGE_COLUMNS = ["played_at_ms", "track_id", "track_uri", "name", "artists", "album", "explicit", ...EXPORT_PLAY_FIELDS.map(([name]) => name)];
 
-// The last duplicate wins, across entries too (entries are staged in the CLI's file order).
-const UPSERT_STAGED = `INSERT INTO import_plays (${STAGE_COLUMNS.join(", ")})
-SELECT ${STAGE_COLUMNS.map((_, i) => `json_extract(value, '$[${i}]')`).join(", ")} FROM json_each(?1) WHERE true
-ON CONFLICT(played_at_ms, track_id) DO UPDATE SET ${STAGE_COLUMNS.slice(2).map((c) => `${c} = excluded.${c}`).join(", ")}`;
+// Rows belong to their import (?2). The last duplicate wins, across entries too (entries are staged
+// in the CLI's file order).
+const UPSERT_STAGED = `INSERT INTO import_plays (import_id, ${STAGE_COLUMNS.join(", ")})
+SELECT ?2, ${STAGE_COLUMNS.map((_, i) => `json_extract(value, '$[${i}]')`).join(", ")} FROM json_each(?1) WHERE true
+ON CONFLICT(import_id, played_at_ms, track_id) DO UPDATE SET ${STAGE_COLUMNS.slice(2).map((c) => `${c} = excluded.${c}`).join(", ")}`;
 
 export const uploadPrefix = (importId: string): string => `imports/${importId}/`;
 const baseName = (path: string) => path.split("/").pop() ?? path;
@@ -29,10 +30,10 @@ export function stageRows(c: ExportCollector): unknown[][] {
   });
 }
 
-/** Statements that upsert `rows` into import_plays. */
-export function stageStatements(db: D1Database, rows: unknown[][]): D1PreparedStatement[] {
+/** Statements that upsert `rows` into import_plays for `importId`. */
+export function stageStatements(db: D1Database, importId: string, rows: unknown[][]): D1PreparedStatement[] {
   const out: D1PreparedStatement[] = [];
-  for (let i = 0; i < rows.length; i += STAGE_CHUNK) out.push(db.prepare(UPSERT_STAGED).bind(JSON.stringify(rows.slice(i, i + STAGE_CHUNK))));
+  for (let i = 0; i < rows.length; i += STAGE_CHUNK) out.push(db.prepare(UPSERT_STAGED).bind(JSON.stringify(rows.slice(i, i + STAGE_CHUNK)), importId));
   return out;
 }
 
@@ -60,8 +61,9 @@ export async function listEntries(bucket: R2Bucket, files: ImportFile[]): Promis
 
 /**
  * The `index` step: lists the entries once and records them in `imports.entries`; a retry reuses
- * that record (the uploads may already be deleted). The first time it also clears staging rows
- * an interrupted import left behind (only one import is open at a time).
+ * that record (the uploads may already be deleted). The first time it also clears this import's
+ * staging rows (none, normally) and those of imports that are over (an interrupted Workflow can
+ * leave some); rows of an open import are never touched.
  */
 export async function indexImport(db: D1Database, bucket: R2Bucket, importId: string, now = Date.now()): Promise<StageEntry[]> {
   const row = await db.prepare("SELECT status, files, entries FROM imports WHERE id = ?1").bind(importId).first<{ status: string; files: string; entries: string }>();
@@ -72,7 +74,12 @@ export async function indexImport(db: D1Database, bucket: R2Bucket, importId: st
   const files = (JSON.parse(row.files) as ImportFile[]).filter((f) => f.done);
   const entries = await listEntries(bucket, files);
   await db.batch([
-    db.prepare("DELETE FROM import_plays WHERE (SELECT entries FROM imports WHERE id = ?1) = '{}'").bind(importId),
+    db
+      .prepare(
+        `DELETE FROM import_plays WHERE (SELECT entries FROM imports WHERE id = ?1) = '{}'
+           AND (import_id = ?1 OR import_id NOT IN (SELECT id FROM imports WHERE status IN (SELECT value FROM json_each(?2))))`,
+      )
+      .bind(importId, JSON.stringify(OPEN_STATUSES)),
     db
       .prepare("UPDATE imports SET entries = ?2, progress = ?3, updated_at = ?4 WHERE id = ?1 AND entries = '{}'")
       .bind(importId, JSON.stringify(Object.fromEntries(entries.map((e) => [e.key, e]))), `Reading ${entries.length} file${entries.length === 1 ? "" : "s"}`, now),
@@ -117,7 +124,7 @@ export async function stageEntry(db: D1Database, bucket: R2Bucket, importId: str
     const first = Number.isFinite(c.first) ? c.first : null;
     const last = Number.isFinite(c.last) ? c.last : null;
     await db.batch([
-      ...stageStatements(db, stageRows(c)),
+      ...stageStatements(db, importId, stageRows(c)),
       db
         .prepare(
           `UPDATE imports SET entries = json_set(entries, ?2, json(?3)),

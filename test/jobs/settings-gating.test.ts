@@ -350,6 +350,31 @@ describe("runSyncFull", () => {
     await expect(runSyncFull(cfg, env.DB, client(cfg), { limit: 0 })).rejects.toThrow(/positive integer/);
   });
 
+  it("records each Frequent Plays batch once Spotify took it, so a retry after a failed batch adds no duplicates", async () => {
+    await setState(env.DB, "playlist:frequent", "freqX");
+    const cfg: Config = { ...configWith({ liked: false, frequentMinPlays: 1 }), addBatchSize: 2 };
+    const mock = mockSpotify(spotify());
+    restore = mock.restore;
+    const served = globalThis.fetch;
+    let posts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      // The second batch fails (a 400 isn't retried by the client).
+      if (init?.method === "POST" && url.endsWith("/v1/playlists/freqX/tracks") && ++posts === 2) {
+        return new Response(JSON.stringify({ error: { status: 400, message: "boom" } }), { status: 400 });
+      }
+      return served(input, init);
+    }) as typeof fetch;
+    const added = () => mock.calls.filter((c) => c.op === "playlist_add").flatMap((c) => c.uris as string[]);
+
+    await expect(runSyncFull(cfg, env.DB, client(cfg), { limit: 100 })).rejects.toThrow();
+    expect(added()).toHaveLength(2);
+    // The retried step (the import's backfill) adds only the rest.
+    expect(await runSyncFull(cfg, env.DB, client(cfg), { limit: 100 })).toMatchObject({ frequentAdded: 3, remaining: 0 });
+    expect(added()).toHaveLength(5);
+    expect(new Set(added()).size).toBe(5);
+  });
+
   it("reports nothing remaining in dry run, where another call couldn't progress", async () => {
     const cfg = configWith({ liked: true, frequentMinPlays: 2 }, "dry_run");
     const mock = mockSpotify(spotify());
@@ -416,6 +441,24 @@ describe("one-time import of the legacy deploy vars", () => {
     await importLegacyConfig(env.DB, legacyEnv({ SPOTIFY_FREQUENT_PLAYLIST_ID: "" }));
     expect(await settingRows()).toMatchObject({ frequent: "false" });
     expect(await getState(env.DB, "playlist:frequent")).toBeNull();
+  });
+
+  it("treats an absent frequent playlist id like an empty one (the old template's default)", async () => {
+    await importLegacyConfig(env.DB, legacyEnv({ SPOTIFY_FREQUENT_PLAYLIST_ID: undefined }));
+    expect(await settingRows()).toMatchObject({ frequent: "false" });
+    expect(await getState(env.DB, "playlist:frequent")).toBeNull();
+    // So the next sync doesn't create a Frequent Plays playlist.
+    expect((await loadSettings(env.DB, testEnv())).values.frequent).toBe(false);
+  });
+
+  it("leaves Frequent Plays on without an id when its playlist is already known, or the deploy config chose", async () => {
+    await setState(env.DB, "playlist:frequent", "known1");
+    await importLegacyConfig(env.DB, legacyEnv({ SPOTIFY_FREQUENT_PLAYLIST_ID: undefined }));
+    expect(await settingRows()).not.toHaveProperty("frequent");
+
+    await env.DB.batch([env.DB.prepare("DELETE FROM state WHERE key IN ('playlist:frequent', ?1)").bind(LEGACY_IMPORTED_KEY), env.DB.prepare("DELETE FROM settings")]);
+    await importLegacyConfig(env.DB, legacyEnv({ SPOTIFY_FREQUENT_PLAYLIST_ID: undefined, SETTINGS: '{"frequent": true}' }));
+    expect(await settingRows()).not.toHaveProperty("frequent");
   });
 
   it("a fresh instance gets its ids but keeps the new defaults", async () => {

@@ -173,7 +173,9 @@ const DASHBOARD = [
  *   files = [{n,name,size,key,done}] (R2 keys are imports/<id>/<n>.<zip|json>, never user file names);
  *   entries = {"<file n>/<entry name>": {records,skipped,short,from,to}}; applied_to = end (exclusive)
  *   of the last applied month, part of each month's atomic batch so a replayed step deletes nothing.
- * - import_plays: staged plays (>= 30 s) of the one active import, deleted as each month is applied.
+ * - import_plays: staged plays (>= 30 s) per import (import_id), deleted as each month is applied.
+ *   Every read and write is scoped by import_id, so a leftover Workflow instance of an older import
+ *   can never touch (or delete) a newer import's staging rows.
  */
 const IMPORTS = [
   `CREATE TABLE IF NOT EXISTS imports (
@@ -193,6 +195,7 @@ const IMPORTS = [
     attempt INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS import_plays (
+    import_id TEXT NOT NULL,
     played_at_ms INTEGER NOT NULL,
     track_id TEXT NOT NULL,
     track_uri TEXT NOT NULL,
@@ -209,7 +212,7 @@ const IMPORTS = [
     skipped INTEGER,
     offline INTEGER,
     incognito_mode INTEGER,
-    PRIMARY KEY (played_at_ms, track_id)
+    PRIMARY KEY (import_id, played_at_ms, track_id)
   )`,
 ];
 

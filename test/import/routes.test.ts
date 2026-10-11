@@ -13,6 +13,7 @@ import { getImport, type Preview } from "../../src/import/store";
 import { LIKED_SONGS_WARNING } from "../../src/settings";
 import { resetDb } from "../parity/spotify-fixture";
 import { bucketKeys, clearBucket, count, insertImport } from "./helpers";
+import type { ImportParams } from "../../src/env";
 
 const ORIGIN = "https://sync.test";
 const testEnv = (overrides: Partial<Env> = {}): Env => ({ ...(env as unknown as Env), PUBLIC_URL: ORIGIN, WRITE_MODE: "dry_run", ...overrides });
@@ -217,7 +218,7 @@ describe("review and approve", () => {
   async function inReview(preview: Preview = PREVIEW) {
     const id = await insertImport(db, { status: "review", preview });
     await env.IMPORTS.put(`imports/${id}/1.zip`, "leftover");
-    await db.prepare("INSERT INTO import_plays (played_at_ms, track_id, track_uri) VALUES (1, 'a', 'spotify:track:a')").run();
+    await db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri) VALUES (?1, 1, 'a', 'spotify:track:a')").bind(id).run();
     return id;
   }
 
@@ -272,11 +273,13 @@ describe("review and approve", () => {
     expect(await (await call("/import?ok=cancelled")).text()).toContain("Import cancelled");
   });
 
-  it("can't cancel once applying", async () => {
+  it("can't cancel once applying while its Workflow runs", async () => {
     const id = await insertImport(db, { status: "applying", preview: PREVIEW });
-    const res = await call(`/import/${id}/cancel`, { method: "POST" });
+    const wf = fakeWorkflow({ [id]: { status: "running" } });
+    const res = await call(`/import/${id}/cancel`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
     expect(res.headers.get("Location")).toBe("/import?err=moved");
     expect((await getImport(db, id))?.status).toBe("applying");
+    expect(wf.terminated).toEqual([]);
   });
 
   it("escapes what came from the export or an error", async () => {
@@ -291,5 +294,138 @@ describe("review and approve", () => {
     const html = await (await call("/import")).text();
     expect(html).toContain('<script type="module" src="/import.js"></script>');
     expect(html).toContain(`data-part-size="${PART_SIZE}"`);
+  });
+});
+
+/**
+ * A Workflow binding whose instances are plain records: `status` is what status() reports; terminate
+ * stops one unless `stuck` (it then throws and keeps running); create can fail before or after
+ * creating the instance.
+ */
+function fakeWorkflow(instances: Record<string, { status: string; stuck?: boolean }>, opts: { createFails?: "before" | "after" } = {}) {
+  const terminated: string[] = [];
+  const created: Array<{ id: string; params: ImportParams }> = [];
+  const handle = (id: string) => ({
+    id,
+    status: async () => ({ status: instances[id]!.status }),
+    terminate: async () => {
+      terminated.push(id);
+      if (instances[id]!.stuck) throw new Error("internal error");
+      instances[id]!.status = "terminated";
+    },
+    sendEvent: async () => {},
+  });
+  const binding = {
+    get: async (id: string) => {
+      if (!instances[id]) throw new Error("instance.not_found");
+      return handle(id);
+    },
+    create: async ({ id, params }: { id: string; params: ImportParams }) => {
+      if (opts.createFails === "before") throw new Error("network error");
+      instances[id] = { status: "running" };
+      created.push({ id, params });
+      if (opts.createFails === "after") throw new Error("timed out");
+      return handle(id);
+    },
+  } as unknown as Workflow<ImportParams>;
+  return { binding, instances, terminated, created };
+}
+
+describe("Workflow instance safety", () => {
+  const stage = (id: string, track: string) =>
+    db.prepare("INSERT INTO import_plays (import_id, played_at_ms, track_id, track_uri) VALUES (?1, 1, ?2, 'spotify:track:' || ?2)").bind(id, track).run();
+  const staged = (id: string) => count(db, `SELECT COUNT(*) AS n FROM import_plays WHERE import_id = '${id}'`);
+
+  it("refuses to cancel while the instance can't be stopped, and changes nothing", async () => {
+    const id = await insertImport(db, { status: "review", preview: PREVIEW });
+    await stage(id, "a");
+    const wf = fakeWorkflow({ [id]: { status: "waiting", stuck: true } });
+    const res = await call(`/import/${id}/cancel`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
+    expect(res.headers.get("Location")).toBe("/import?err=running");
+    expect(wf.terminated).toEqual([id]);
+    expect((await getImport(db, id))?.status).toBe("review");
+    expect(await staged(id)).toBe(1);
+    expect(await (await call("/import?err=running")).text()).toContain("still running");
+  });
+
+  it("cancels once the instance is confirmed stopped, deleting only this import's staging rows", async () => {
+    const id = await insertImport(db, { status: "review", preview: PREVIEW });
+    await stage(id, "a");
+    await stage("another-import", "b");
+    const wf = fakeWorkflow({ [id]: { status: "waiting" } });
+    const res = await call(`/import/${id}/cancel`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
+    expect(res.headers.get("Location")).toBe("/import?ok=cancelled");
+    expect(wf.instances[id]!.status).toBe("terminated");
+    expect(await staged(id)).toBe(0);
+    expect(await staged("another-import")).toBe(1);
+  });
+
+  it("lets a stuck applying import (instance stopped) be cancelled or retried", async () => {
+    for (const status of ["errored", "terminated", "complete"]) {
+      await resetDb(db);
+      const id = await insertImport(db, { status: "applying", preview: PREVIEW, options: { liked: false, frequent: true } });
+      await stage(id, "a");
+      const wf = fakeWorkflow({ [id]: { status } });
+      const e = testEnv({ IMPORT_WORKFLOW: wf.binding });
+      expect((await call(`/import/${id}/retry`, { method: "POST" }, session, e)).headers.get("Location")).toBe("/import?ok=retrying");
+      expect(await getImport(db, id)).toMatchObject({ status: "applying", attempt: 1 });
+      expect(wf.created).toEqual([{ id: `${id}-r1`, params: { importId: id, attempt: 1 } }]);
+
+      // The retry's instance stops too: now discard it. Months already applied would stay.
+      wf.instances[`${id}-r1`]!.status = "errored";
+      expect((await call(`/import/${id}/cancel`, { method: "POST" }, session, e)).headers.get("Location")).toBe("/import?ok=cancelled");
+      expect((await getImport(db, id))?.status).toBe("cancelled");
+      expect(await staged(id)).toBe(0);
+    }
+  });
+
+  it("shows Retry and Cancel on an applying import that hasn't moved for a while, and stops refreshing", async () => {
+    const id = await insertImport(db, { status: "applying", preview: PREVIEW, createdAt: Date.now() - 2 * 3_600_000 });
+    const res = await call("/import");
+    const html = await res.text();
+    expect(html).toContain(`action="/import/${id}/retry"`);
+    expect(html).toContain(`action="/import/${id}/cancel"`);
+    expect(html).not.toContain('http-equiv="refresh"');
+    await db.prepare("UPDATE imports SET updated_at = ?2 WHERE id = ?1").bind(id, Date.now()).run();
+    const fresh = await (await call("/import")).text();
+    expect(fresh).not.toContain(`action="/import/${id}/retry"`);
+    expect(fresh).toContain('http-equiv="refresh"');
+  });
+
+  it("refuses a retry while the previous attempt's instance still runs", async () => {
+    const id = await insertImport(db, { status: "failed" });
+    const wf = fakeWorkflow({ [id]: { status: "running", stuck: true } });
+    const res = await call(`/import/${id}/retry`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
+    expect(res.headers.get("Location")).toBe("/import?err=running");
+    expect(await getImport(db, id)).toMatchObject({ status: "failed", attempt: 0 });
+    expect(wf.created).toEqual([]);
+  });
+
+  async function readyToStart() {
+    const { body } = await callJson("/import/new");
+    const id = body.id as string;
+    const file = await callJson(`/import/${id}/file`, { json: { name: "my_spotify_data.zip", size: 64 } });
+    const part = await (await call(`/import/${id}/file/1/part/1?u=${encodeURIComponent(file.body.uploadId)}`, { method: "PUT", body: new Uint8Array(64), headers: { "Content-Length": "64" } })).json();
+    await callJson(`/import/${id}/file/1/complete`, { json: { uploadId: file.body.uploadId, parts: [part] } });
+    return id;
+  }
+
+  it("start: a create that fails after creating the instance counts as started (no zombie next to a retry)", async () => {
+    const id = await readyToStart();
+    const wf = fakeWorkflow({}, { createFails: "after" });
+    const res = await call(`/import/${id}/start`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
+    expect(await res.json()).toEqual({ ok: true });
+    expect(await getImport(db, id)).toMatchObject({ status: "reading", attempt: 0 });
+    expect(wf.created.map((c) => c.id)).toEqual([id]);
+  });
+
+  it("start: a create that fails before creating anything marks the import failed", async () => {
+    const id = await readyToStart();
+    const wf = fakeWorkflow({}, { createFails: "before" });
+    const res = await call(`/import/${id}/start`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: wf.binding }));
+    expect(res.status).toBe(500);
+    expect(await getImport(db, id)).toMatchObject({ status: "failed", error: "Couldn't start the import: network error" });
+    // Nothing runs for it, so a retry is safe.
+    expect((await call(`/import/${id}/retry`, { method: "POST" }, session, testEnv({ IMPORT_WORKFLOW: fakeWorkflow({}).binding }))).headers.get("Location")).toBe("/import?ok=retrying");
   });
 });

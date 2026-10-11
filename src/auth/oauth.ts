@@ -51,7 +51,8 @@ const NO_RETURN = /^\/(login|claim|auth|logout|reconnect)(\/|\?|#|$)/;
 /**
  * A same-origin relative path to return to after logging in, else "/": it must start with one `/`
  * (not `//` or `/\`, which browsers treat as another host), contain no control characters or
- * backslashes, and resolve to this origin.
+ * backslashes, and resolve to this origin. Checked again after normalising: dot segments can turn
+ * `/.//evil.com` or `/a/..//evil.com` into `//evil.com`, which a Location header sends off-site.
  */
 export function safeNext(next: string | null | undefined): string {
   if (!next || next.length > MAX_NEXT || !next.startsWith("/") || /[\u0000-\u001f\u007f\\]/.test(next) || next.startsWith("//")) return "/";
@@ -64,7 +65,7 @@ export function safeNext(next: string | null | undefined): string {
   }
   if (url.origin !== base) return "/";
   const path = url.pathname + url.search + url.hash;
-  return NO_RETURN.test(path) ? "/" : path;
+  return path.startsWith("//") || NO_RETURN.test(path) ? "/" : path;
 }
 
 const toBase64url = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");

@@ -151,17 +151,19 @@ export const LEGACY_IMPORTED_KEY = "legacy_config:imported";
  *   keys). Never over a value already there (a login pins the owner too).
  * - An instance with data (plays or a Spotify login) gets a `settings` row for each setting whose
  *   current value would change without the vars: TIME_ZONE, FREQUENT_MIN_PLAYS, AI_EDITOR, Hindi
- *   Favorites on (its id), Frequent Plays off (an empty id). Rows already there win. Fresh instances
+ *   Favorites on (its id), Frequent Plays off (an empty or absent id: the old template defaulted it
+ *   to "", and Frequent Plays never ran without one). Rows already there win. Fresh instances
  *   start from the defaults. Liked Songs and the sync cursor (SPOTIFY_ALL_PLAYLIST_ID) need no env:
  *   migration v12 handles them.
  * Returns what it copied (for the activity log), or null when there was nothing to do.
  */
 export async function importLegacyConfig(db: D1Database, env: Env, now = Date.now()): Promise<string[] | null> {
   if (!hasLegacyVars(env)) return null;
-  const [flag, data, rows] = await db.batch([
+  const [flag, data, rows, frequentRow] = await db.batch([
     db.prepare("SELECT 1 AS done FROM state WHERE key = ?1").bind(LEGACY_IMPORTED_KEY),
     db.prepare("SELECT (EXISTS (SELECT 1 FROM plays) OR EXISTS (SELECT 1 FROM state WHERE key = 'spotify_refresh_token')) AS has_data"),
     db.prepare("SELECT key FROM settings"),
+    db.prepare("SELECT 1 AS found FROM state WHERE key = ?1").bind(playlistStateKey(FREQUENT_PLAYLIST.key)),
   ]);
   if (flag!.results.length) return null;
   const hasData = (data!.results[0] as { has_data: number } | undefined)?.has_data === 1;
@@ -183,10 +185,10 @@ export async function importLegacyConfig(db: D1Database, env: Env, now = Date.no
   if (hasData) {
     const today = resolveSettings([], env);
     const current: SettingValues = { ...today.values };
-    // Frequent Plays only ran with a playlist id; an empty one meant off.
-    if (env.SPOTIFY_FREQUENT_PLAYLIST_ID !== undefined && today.source.frequent === "default") {
-      current.frequent = env.SPOTIFY_FREQUENT_PLAYLIST_ID.trim() !== "";
-    }
+    // Frequent Plays only ran with a playlist id; an empty or absent one meant off. Keep it off
+    // unless a Frequent Plays playlist is known, so the next sync doesn't create a new one.
+    const frequentId = env.SPOTIFY_FREQUENT_PLAYLIST_ID?.trim() ?? "";
+    if (today.source.frequent === "default" && !frequentId && !frequentRow!.results.length) current.frequent = false;
     const without = resolveSettings([], withoutLegacyVars(env)).values;
     for (const key of SETTING_KEYS) {
       if (current[key] === without[key] || saved.has(key)) continue;
