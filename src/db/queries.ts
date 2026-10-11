@@ -665,3 +665,115 @@ export async function recapRepeatPlays(db: D1Database, from: number, to: number)
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
+
+// --- digest highlights (src/editor/highlights.ts; plays with from <= played_at_ms < to) ---
+
+export interface PeriodPlay {
+  at: number;
+  id: string;
+  /** Listening time: the export's ms_played, else the track's duration, else 0. */
+  ms: number;
+}
+
+/** Every play in the range with its track and listening time, oldest first (highlights bucket them in JS). */
+export async function periodPlayRows(db: D1Database, from: number, to: number): Promise<PeriodPlay[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.played_at_ms AS at, p.track_id AS id, COALESCE(p.ms_played, t.duration_ms, 0) AS ms
+       FROM plays p LEFT JOIN tracks t ON t.track_id = p.track_id
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2 ORDER BY p.played_at_ms`,
+    )
+    .bind(from, to)
+    .all<PeriodPlay>();
+  return results;
+}
+
+/**
+ * Tracks played at least `minPlays` times in the range after a break of `idleMs` or more, having
+ * had at least `minEarlierPlays` plays before it; most played first, at most 3.
+ */
+export async function digestComebackTracks(
+  db: D1Database,
+  from: number,
+  to: number,
+  opts: { idleMs: number; minEarlierPlays: number; minPlays: number },
+): Promise<Array<RecapTrack & { earlier: number; last_before_ms: number }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT p.track_id, t.name, t.artists,
+              SUM(p.played_at_ms >= ?1) AS plays, SUM(p.played_at_ms < ?1) AS earlier,
+              MAX(CASE WHEN p.played_at_ms < ?1 THEN p.played_at_ms END) AS last_before_ms
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       WHERE p.played_at_ms < ?2
+         AND p.track_id IN (SELECT DISTINCT track_id FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2)
+       GROUP BY p.track_id, t.name, t.artists
+       HAVING plays >= ?5 AND earlier >= ?4 AND last_before_ms < ?1 - ?3
+       ORDER BY plays DESC, p.track_id
+       LIMIT 3`,
+    )
+    .bind(from, to, opts.idleMs, opts.minEarlierPlays, opts.minPlays)
+    .all<RecapTrack & { earlier: number; last_before_ms: number }>();
+  return results;
+}
+
+/** The most played track first heard in the range (ties: found earlier), or null. */
+export async function digestNewObsession(db: D1Database, from: number, to: number): Promise<(RecapTrack & { first_ms: number }) | null> {
+  return db
+    .prepare(
+      `SELECT p.track_id, t.name, t.artists, COUNT(*) AS plays, MIN(p.played_at_ms) AS first_ms
+       FROM plays p JOIN tracks t ON t.track_id = p.track_id
+       WHERE p.played_at_ms < ?2
+         AND p.track_id IN (SELECT DISTINCT track_id FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2)
+       GROUP BY p.track_id, t.name, t.artists
+       HAVING MIN(p.played_at_ms) >= ?1
+       ORDER BY plays DESC, first_ms
+       LIMIT 1`,
+    )
+    .bind(from, to)
+    .first<RecapTrack & { first_ms: number }>();
+}
+
+export interface GenreShares {
+  /** Plays per genre (under the primary artist's genres) in [from, to) and in [prevFrom, from). */
+  genres: Array<{ genre: string; now: number; before: number }>;
+  /** Plays whose primary artist has any genre: the denominator of a share. */
+  tagged: { now: number; before: number };
+}
+
+/** Genre play counts in the range and in the one before it (`prevFrom` to `from`). Bad or empty genre JSON counts as untagged. */
+export async function digestGenreShares(db: D1Database, prevFrom: number, from: number, to: number): Promise<GenreShares> {
+  const genres = "CASE WHEN json_valid(a.genres) THEN a.genres ELSE '[]' END";
+  const { results } = await db
+    .prepare(
+      `SELECT g.value AS genre, SUM(p.played_at_ms >= ?2) AS now, SUM(p.played_at_ms < ?2) AS before
+       FROM plays p
+       JOIN track_artists ta ON ta.track_id = p.track_id AND ta.position = 0
+       JOIN artists a ON a.artist_id = ta.artist_id
+       JOIN json_each(${genres}) g
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?3
+       GROUP BY g.value
+       UNION ALL
+       SELECT '__tagged__', SUM(p.played_at_ms >= ?2), SUM(p.played_at_ms < ?2)
+       FROM plays p
+       JOIN track_artists ta ON ta.track_id = p.track_id AND ta.position = 0
+       JOIN artists a ON a.artist_id = ta.artist_id
+       WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?3 AND json_array_length(${genres}) > 0`,
+    )
+    .bind(prevFrom, from, to)
+    .all<{ genre: string; now: number | null; before: number | null }>();
+  const tagged = results.find((r) => r.genre === "__tagged__");
+  return {
+    genres: results.filter((r) => r !== tagged).map((r) => ({ genre: r.genre, now: r.now ?? 0, before: r.before ?? 0 })),
+    tagged: { now: tagged?.now ?? 0, before: tagged?.before ?? 0 },
+  };
+}
+
+/** Name and artists of each known track among `trackIds` (one bound JSON array). */
+export async function trackNames(db: D1Database, trackIds: string[]): Promise<Map<string, Pick<RecapTrack, "name" | "artists">>> {
+  if (!trackIds.length) return new Map();
+  const { results } = await db
+    .prepare("SELECT track_id, name, artists FROM tracks WHERE track_id IN (SELECT value FROM json_each(?1))")
+    .bind(JSON.stringify(trackIds))
+    .all<{ track_id: string; name: string | null; artists: string | null }>();
+  return new Map(results.map((r) => [r.track_id, { name: r.name, artists: r.artists }]));
+}
