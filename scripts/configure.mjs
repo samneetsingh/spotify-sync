@@ -8,7 +8,7 @@
 // JSON itself, e.g. a Workers Builds build variable); deploy.config.json.
 // Output: --out, default wrangler.generated.toml. It must sit in the repo root, because the
 // template's paths (main, assets) are relative to the config file.
-// Keys and example values: deploy.config.example.json. Keys in DEFAULTS and OPTIONS may be left out.
+// Keys and example values: deploy.config.example.json. Keys in OPTIONS and LEGACY_KEYS may be left out.
 import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,15 +19,26 @@ const TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
 // Characters that would break out of (or corrupt) a TOML basic string.
 const UNSAFE = /["\\\u0000-\u001f\u007f]/;
 
-/** Optional keys. An empty playlist id switches that feature off; no SPOTIFY_USER_ID means the setup link picks the owner. */
-export const DEFAULTS = {
-  SPOTIFY_USER_ID: "",
-  SPOTIFY_ALL_PLAYLIST_ID: "",
-  SPOTIFY_FREQUENT_PLAYLIST_ID: "",
-  SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID: "",
-  TIME_ZONE: "UTC",
-  AI_EDITOR: "off",
-};
+/** Optional placeholder keys and their defaults (none at the moment: every placeholder is required). */
+export const DEFAULTS = {};
+
+/**
+ * Pre-dashboard keys, now dashboard settings and ids the Worker keeps in D1. Each one a deploy config
+ * still has (even empty) is written to [vars] (`# {{LEGACY_VARS}}`), and to [env.test.vars]
+ * (`# {{LEGACY_TEST_VARS}}`) except AI_EDITOR, so an existing instance can deploy this version with
+ * its old config: the Worker copies them into D1 once (importLegacyConfig in src/runtime.ts). Then
+ * remove them from the deploy config; nothing changes.
+ */
+export const LEGACY_KEYS = [
+  "SPOTIFY_USER_ID",
+  "SPOTIFY_ALL_PLAYLIST_ID",
+  "SPOTIFY_FREQUENT_PLAYLIST_ID",
+  "SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID",
+  "TIME_ZONE",
+  "FREQUENT_MIN_PLAYS",
+  "AI_EDITOR",
+];
+const LEGACY_LINE = /^# \{\{(LEGACY_VARS|LEGACY_TEST_VARS)\}\}\n/gm;
 
 /**
  * Optional structured (lowercase) keys, not placeholders:
@@ -72,10 +83,14 @@ export function render(template, config, source = "the deploy config") {
   if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error(`${source} must be a JSON object`);
   const options = { ...OPTIONS, ...config };
   const enabled = { imports: options.imports !== false };
-  const body = template.replace(SECTION, (_, name, inner) => {
-    if (!(name in enabled)) throw new Error(`wrangler.toml: unknown section {{#${name}}}`);
-    return enabled[name] ? inner : "";
-  });
+  const legacy = LEGACY_KEYS.filter((k) => k in config);
+  const legacyLines = (keys) => keys.filter((k) => typeof config[k] === "string" && !UNSAFE.test(config[k])).map((k) => `${k} = "${config[k]}"\n`).join("");
+  const body = template
+    .replace(SECTION, (_, name, inner) => {
+      if (!(name in enabled)) throw new Error(`wrangler.toml: unknown section {{#${name}}}`);
+      return enabled[name] ? inner : "";
+    })
+    .replace(LEGACY_LINE, (_, name) => legacyLines(name === "LEGACY_VARS" ? legacy : legacy.filter((k) => k !== "AI_EDITOR")));
   if (/\{\{[#/]/.test(body)) throw new Error("wrangler.toml: a {{#section}} marker has no match (markers are whole lines: # {{#name}} ... # {{/name}})");
   const keys = [...new Set(Array.from(body.matchAll(TOKEN), (m) => m[1]))];
   const derived = { SETTINGS: JSON.stringify(typeof options.settings === "object" && options.settings ? options.settings : {}) };
@@ -84,6 +99,8 @@ export function render(template, config, source = "the deploy config") {
   const missing = given.filter((k) => typeof values[k] !== "string" || (values[k] === "" && !(k in DEFAULTS)));
   const unsafe = given.filter((k) => typeof values[k] === "string" && UNSAFE.test(values[k]));
   const problems = optionProblems(config);
+  const badLegacy = legacy.filter((k) => typeof config[k] !== "string" || UNSAFE.test(config[k]));
+  if (badLegacy.length) problems.push(`legacy keys must be text without quotes, backslashes or control characters: ${badLegacy.join(", ")}`);
   if (missing.length) problems.push(`missing or empty (strings required): ${missing.join(", ")}`);
   if (unsafe.length) problems.push(`quotes, backslashes or control characters in: ${unsafe.join(", ")}`);
   if (enabled.imports) {
@@ -93,7 +110,8 @@ export function render(template, config, source = "the deploy config") {
   if (problems.length) throw new Error(`${source}: ${problems.join("; ")}. See deploy.config.example.json.`);
   return {
     text: body.replace(TOKEN, (_, k) => values[k]),
-    unused: Object.keys(config).filter((k) => !keys.includes(k) && !(k in OPTIONS)),
+    unused: Object.keys(config).filter((k) => !keys.includes(k) && !(k in OPTIONS) && !LEGACY_KEYS.includes(k)),
+    legacy,
   };
 }
 
@@ -101,10 +119,10 @@ export function render(template, config, source = "the deploy config") {
 export function generate(config, out = "wrangler.generated.toml", source) {
   const target = resolve(ROOT, out);
   if (dirname(target) !== ROOT) throw new Error(`--out must be a file in the repo root (got ${out})`);
-  const { text, unused } = render(readFileSync(TEMPLATE, "utf8"), config, source);
+  const { text, unused, legacy } = render(readFileSync(TEMPLATE, "utf8"), config, source);
   const header = "# GENERATED by scripts/configure.mjs from wrangler.toml. Don't edit: change the template or your deploy config.\n";
   writeFileSync(target, header + text);
-  return { file: relative(ROOT, target), unused };
+  return { file: relative(ROOT, target), unused, legacy };
 }
 
 function parseJson(text, source) {
@@ -132,9 +150,12 @@ function loadConfig(argv) {
 function main(argv) {
   const { source, config } = loadConfig(argv);
   const at = argv.indexOf("--out");
-  const { file, unused } = generate(config, at >= 0 ? argv[at + 1] : undefined, source);
+  const { file, unused, legacy } = generate(config, at >= 0 ? argv[at + 1] : undefined, source);
   console.log(`Wrote ${file} from ${source}.`);
   if (unused.length) console.warn(`Ignored keys the template doesn't use: ${unused.join(", ")}`);
+  if (legacy.length) {
+    console.warn(`Pre-dashboard keys written as vars: ${legacy.join(", ")}. The Worker copies them into D1 on its first run; then remove them from ${source} (README, "Upgrading").`);
+  }
 }
 
 // Run as a script (not imported, as vitest.config.ts does). realpath: /tmp vs /private/tmp etc.

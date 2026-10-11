@@ -4,7 +4,8 @@
 //
 // Both are owned playlists (see owned-playlists.ts), rewritten whole with
 // replacePlaylistItems. `playlist:<key>:period` holds the day/week last written, so
-// reruns are no-ops.
+// reruns are no-ops. Each runs only with its setting on (cfg.features); switching one off
+// leaves its playlist and `state` alone, so switching it back on carries on with the same one.
 
 import type { Config } from "../config";
 import { forgottenTracks, recordActions, tracksPlayedIn, type PlaylistTrackRef } from "../db/queries";
@@ -18,12 +19,14 @@ const FIRST_YEAR = 2008; // Spotify launched; no plays before this
 const DAY_MS = 86_400_000;
 
 export interface HistoryPlaylistsResult {
-  /** Tracks written per playlist; null when skipped (switched off, or already current). */
+  /** Tracks written per playlist; null when skipped (off in settings, deleted in Spotify, or already current). */
   onThisDay: number | null;
   forgottenFavorites: number | null;
 }
 
 interface PlaylistSpec extends OwnedPlaylist {
+  /** Its setting; off skips it without touching `state`. */
+  enabled: boolean;
   /** The day or week this run writes; the playlist is only rewritten when it changes. */
   period: string;
   pick: () => Promise<PlaylistTrackRef[]>;
@@ -42,6 +45,7 @@ export async function runHistoryPlaylists(
   try {
     const onThisDay = await refresh(cfg, db, sp, isFollowed, {
       key: "on_this_day",
+      enabled: cfg.features.onThisDay,
       name: "On This Day",
       description: "What you played on this date in years past, oldest first. Refreshed every morning by spotify-sync.",
       period: formatDate(today),
@@ -49,6 +53,7 @@ export async function runHistoryPlaylists(
     });
     const forgottenFavorites = await refresh(cfg, db, sp, isFollowed, {
       key: "forgotten_favorites",
+      enabled: cfg.features.forgottenFavorites,
       name: "Forgotten Favorites",
       description: `Songs you've played ${h.forgottenMinPlays}+ times but not in over a year. A new set every Monday, by spotify-sync.`,
       period: week,
@@ -70,6 +75,7 @@ async function refresh(
   isFollowed: (playlistId: string) => Promise<boolean>,
   spec: PlaylistSpec,
 ): Promise<number | null> {
+  if (!spec.enabled) return null;
   const writeState = cfg.writeMode !== "dry_run";
   const periodKey = `${playlistStateKey(spec.key)}:period`;
   const stored = await getState(db, playlistStateKey(spec.key));

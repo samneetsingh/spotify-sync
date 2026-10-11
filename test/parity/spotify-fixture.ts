@@ -3,7 +3,7 @@
 
 import type { Config } from "../../src/config";
 import { runArtistPlaylists } from "../../src/jobs/artist-playlists";
-import { runHindiFavorites } from "../../src/jobs/hindi-favorites";
+import { runHindiFavorites, type HindiFavoritesResult } from "../../src/jobs/hindi-favorites";
 import { runSync, runSyncFull } from "../../src/jobs/sync";
 import type { SpotifyClient } from "../../src/spotify/client";
 import artistFixtures from "./artist-scenarios.json";
@@ -197,11 +197,14 @@ export async function dumpTables(db: D1Database, queries: Record<string, string>
   return out;
 }
 
-/** Worker Config for a scenario's config block. */
+/**
+ * Worker Config for a scenario's config block. Python had no settings: Liked Songs always on, the
+ * playlists on exactly when their (fixed) ids are set, the cursor key named after the ALL playlist.
+ */
 export function scenarioConfig(c: Json, writeMode: Config["writeMode"] = "live"): Config {
   return {
     writeMode,
-    allPlaylistId: c.all_playlist_id,
+    cursorKey: `cursor_after_ms:${c.all_playlist_id}`,
     frequentPlaylistId: c.frequent_playlist_id,
     hindiFavoritesPlaylistId: c.hindi_favorites_playlist_id,
     frequentMinPlays: c.frequent_min_plays,
@@ -224,6 +227,16 @@ export function scenarioConfig(c: Json, writeMode: Config["writeMode"] = "live")
     // Not part of the Python parity fixtures (Worker-only job).
     timeZone: "UTC",
     historyPlaylists: { onThisDayPerYear: 10, forgottenMinPlays: 20, forgottenIdleDays: 365, forgottenSize: 50, holidayMinPlays: 3 },
+    features: {
+      liked: true,
+      frequent: !!c.frequent_playlist_id,
+      artistPlaylists: true,
+      hindiFavorites: !!c.hindi_favorites_playlist_id,
+      onThisDay: true,
+      forgottenFavorites: true,
+      holiday: true,
+    },
+    digests: { weekly: true, monthly: true, aiEditor: false },
   };
 }
 
@@ -235,11 +248,11 @@ export async function runJob(sc: Json, cfg: Config, db: D1Database, sp: SpotifyC
       return { plays_fetched: r.playsFetched, liked_added: r.likedAdded, frequent_added: r.frequentAdded, cursor_in_ms: r.cursorInMs, cursor_out_ms: r.cursorOutMs };
     }
     if (sc.job === "sync_full") {
-      const r = await runSyncFull(cfg, db, sp);
+      const r = await runSyncFull(cfg, db, sp, { liked: true });
       return { total_added: r.likedAdded + r.frequentAdded };
     }
     if (sc.job === "hindi_favorites") {
-      const r = (await runHindiFavorites(cfg, db, sp))!;
+      const r = (await runHindiFavorites(cfg, db, sp)) as HindiFavoritesResult;
       return { tracks_added: r.tracksAdded, tracks_considered: r.tracksConsidered };
     }
     const r = await runArtistPlaylists(cfg, db, sp);

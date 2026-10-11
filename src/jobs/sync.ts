@@ -3,6 +3,10 @@
 // Write-mode gating (README, "Write modes"): the SpotifyClient blocks Spotify writes outside
 // live mode; this module skips "state" writes (playlist_tracks, state) in dry_run.
 // Metadata (tracks, plays, track_artists, artists, sync_runs) is always written.
+//
+// Settings: Liked Songs and Frequent Plays each run only when switched on (cfg.features). Frequent
+// Plays is an owned playlist (owned-playlists.ts, `state` playlist:frequent), created once it has
+// songs to add; deleting it in Spotify switches it off (checked daily by hindi-favorites.ts).
 
 import type { Config } from "../config";
 import { getState, setState } from "../db/state";
@@ -32,6 +36,7 @@ import { SpotifyError } from "../spotify/errors";
 import type { SpotifyClient } from "../spotify/client";
 import { genresJson, trackRows } from "../spotify/metadata";
 import { isValidTrack } from "../spotify/playlist";
+import { ensurePlaylist, PLACEHOLDER_PREFIX, playlistStateKey, type OwnedPlaylist } from "./owned-playlists";
 import { backfillPlaylistCache } from "./playlist-cache";
 import type { RecentlyPlayedResponse } from "../spotify/types";
 import { chunkArray } from "../utils/batch";
@@ -49,7 +54,25 @@ export interface SyncResult {
 }
 
 const writesState = (cfg: Config) => cfg.writeMode !== "dry_run";
-const cursorKey = (playlistId: string) => `cursor_after_ms:${playlistId}`;
+const isPlaceholder = (playlistId: string) => playlistId.startsWith(PLACEHOLDER_PREFIX);
+
+export const FREQUENT_PLAYLIST: OwnedPlaylist = {
+  key: "frequent",
+  name: "Frequent Plays",
+  description: "The songs you play most, added automatically as you listen by spotify-sync. Songs you remove stay removed.",
+};
+
+/**
+ * Frequent Plays' target: Config's fixed id (parity fixtures), else the owned playlist's id from
+ * `state`; null when it isn't created yet; "off" when the setting or the playlist is off.
+ */
+async function frequentTarget(cfg: Config, db: D1Database): Promise<string | null> {
+  if (!cfg.features.frequent) return "off";
+  return cfg.frequentPlaylistId ?? (await getState(db, playlistStateKey(FREQUENT_PLAYLIST.key)));
+}
+
+/** Creates Frequent Plays (saved outside dry_run, never as a placeholder). The daily follow check lives in hindi-favorites.ts. */
+const createFrequent = (cfg: Config, db: D1Database, sp: SpotifyClient) => ensurePlaylist(cfg, db, sp, FREQUENT_PLAYLIST, async () => true);
 
 function parseRecentlyPlayed(resp: RecentlyPlayedResponse) {
   const plays: PlayRow[] = [];
@@ -88,7 +111,7 @@ export async function runSync(
   sp: SpotifyClient,
   now: () => number = Date.now,
 ): Promise<SyncResult> {
-  const stored = await getState(db, cursorKey(cfg.allPlaylistId));
+  const stored = await getState(db, cfg.cursorKey);
   const cursorIn = stored !== null ? parseInt(stored, 10) : now() - cfg.bootstrapHours * 3_600_000;
   const runId = await createSyncRun(db, cursorIn);
 
@@ -99,8 +122,9 @@ export async function runSync(
   let tracksAddedTotal = 0;
 
   try {
-    if (cfg.frequentPlaylistId) {
-      await maybeRefreshPlaylistCache(cfg, db, sp, cfg.frequentPlaylistId, now);
+    const frequent = await frequentTarget(cfg, db);
+    if (frequent && frequent !== "off") {
+      await maybeRefreshPlaylistCache(cfg, db, sp, frequent, now);
     }
 
     // Page until exhausted so bursts of > limit plays are not dropped.
@@ -132,25 +156,29 @@ export async function runSync(
 
     await enrichArtists(db, sp, [...new Set(trackArtists.map((ta) => ta.artist_id))]);
 
-    const likedKnown = await knownPlaylistTrackIds(db, LIKED_CACHE_ID, trackList.map((t) => t.track_id));
-    const likedMissing = trackList.filter((t) => !likedKnown.has(t.track_id));
-    if (likedMissing.length) {
-      likedAdded = await addToLiked(sp, likedMissing.map((t) => t.track_id), cfg.likeBatchSize);
-      if (writesState(cfg)) await runAll(db, markTracksInPlaylist(db, LIKED_CACHE_ID, refs(likedMissing)));
-      tracksAddedTotal += likedAdded;
+    if (cfg.features.liked) {
+      const likedKnown = await knownPlaylistTrackIds(db, LIKED_CACHE_ID, trackList.map((t) => t.track_id));
+      const likedMissing = trackList.filter((t) => !likedKnown.has(t.track_id));
+      if (likedMissing.length) {
+        likedAdded = await addToLiked(sp, likedMissing.map((t) => t.track_id), cfg.likeBatchSize);
+        if (writesState(cfg)) await runAll(db, markTracksInPlaylist(db, LIKED_CACHE_ID, refs(likedMissing)));
+        tracksAddedTotal += likedAdded;
+      }
     }
 
-    if (cfg.frequentPlaylistId) {
+    if (frequent !== "off") {
       const candidates = trackList.length
         ? await frequentTracksAmong(db, trackList.map((t) => t.track_id), cfg.frequentMinPlays)
         : [];
-      frequentAdded = await addToFrequent(cfg, db, sp, cfg.frequentPlaylistId, candidates);
+      // A new owner's playlist appears with its first songs, not as an empty playlist.
+      const playlistId = frequent ?? (candidates.length ? await createFrequent(cfg, db, sp) : null);
+      if (playlistId) frequentAdded = await addToFrequent(cfg, db, sp, playlistId, candidates);
       tracksAddedTotal += frequentAdded;
     }
 
     if (newestMs > 0) {
       cursorOut = newestMs + 1;
-      if (writesState(cfg)) await setState(db, cursorKey(cfg.allPlaylistId), String(cursorOut));
+      if (writesState(cfg)) await setState(db, cfg.cursorKey, String(cursorOut));
     }
 
     await finishSyncRun(db, runId, { cursorOutMs: cursorOut, playsFetched, tracksAdded: tracksAddedTotal, status: "success" });
@@ -177,28 +205,54 @@ export interface SyncFullResult {
   remaining: number;
 }
 
+export interface SyncFullOptions {
+  /** At most this many tracks per call (Liked Songs first), e.g. per import Workflow step; default all. */
+  limit?: number;
+  /**
+   * Backfill Liked Songs: only with this explicit opt-in (the import's checkbox, off by default)
+   * and the Liked Songs setting on. It can add thousands of songs to the owner's library.
+   */
+  liked?: boolean;
+  /** Backfill Frequent Plays (default true) when its setting is on; creates the playlist if needed. */
+  frequent?: boolean;
+}
+
 /**
- * Port of sync_all_tracks (`spotify sync --full`): backfill Liked Songs and the frequent playlist
- * from the whole DB. `limit` caps the tracks added per call (the import Workflow's steps).
+ * Port of sync_all_tracks (`spotify sync --full`): backfill Liked Songs and Frequent Plays from the
+ * whole DB. Only tracks this call could add next time count as `remaining`: in dry_run nothing is
+ * recorded (and a placeholder playlist outside live mode can't be filled), so another call can't
+ * progress and `remaining` is 0.
  */
-export async function runSyncFull(cfg: Config, db: D1Database, sp: SpotifyClient, opts: { limit?: number } = {}): Promise<SyncFullResult> {
-  if (opts.limit !== undefined) throw new Error("not implemented: runSyncFull limit (WP-B)");
+export async function runSyncFull(cfg: Config, db: D1Database, sp: SpotifyClient, opts: SyncFullOptions = {}): Promise<SyncFullResult> {
+  if (opts.limit !== undefined && !(Number.isInteger(opts.limit) && opts.limit > 0)) throw new RangeError("runSyncFull: limit must be a positive integer");
+  let budget = opts.limit ?? Infinity;
+  let remaining = 0;
   try {
-    const likedMissing = await tracksMissingFrom(db, LIKED_CACHE_ID);
     let likedAdded = 0;
-    if (likedMissing.length) {
-      likedAdded = await addToLiked(sp, likedMissing.map((t) => t.track_id), cfg.likeBatchSize);
-      if (likedAdded && writesState(cfg)) await runAll(db, markTracksInPlaylist(db, LIKED_CACHE_ID, likedMissing));
+    if (cfg.features.liked && opts.liked === true) {
+      const missing = await tracksMissingFrom(db, LIKED_CACHE_ID);
+      const batch = missing.slice(0, budget);
+      if (batch.length) {
+        likedAdded = await addToLiked(sp, batch.map((t) => t.track_id), cfg.likeBatchSize);
+        if (likedAdded && writesState(cfg)) await runAll(db, markTracksInPlaylist(db, LIKED_CACHE_ID, batch));
+      }
+      budget -= batch.length;
+      if (writesState(cfg)) remaining += missing.length - batch.length;
     }
 
     let frequentAdded = 0;
-    if (cfg.frequentPlaylistId) {
-      const candidates = await frequentTracksMissingFrom(db, cfg.frequentPlaylistId, cfg.frequentMinPlays);
-      frequentAdded = await addToFrequent(cfg, db, sp, cfg.frequentPlaylistId, candidates);
+    const frequent = opts.frequent === false ? "off" : await frequentTarget(cfg, db);
+    if (frequent !== "off") {
+      // Not created yet: every frequent track is missing from it ("" matches no cached playlist).
+      const candidates = await frequentTracksMissingFrom(db, frequent ?? "", cfg.frequentMinPlays);
+      const batch = candidates.slice(0, budget);
+      const playlistId = frequent ?? (batch.length ? await createFrequent(cfg, db, sp) : null);
+      if (playlistId) frequentAdded = await addToFrequent(cfg, db, sp, playlistId, batch);
+      if (writesState(cfg) && !(playlistId && isPlaceholder(playlistId))) remaining += candidates.length - batch.length;
     }
 
-    console.log(JSON.stringify({ job: "sync-full", writeMode: cfg.writeMode, likedAdded, frequentAdded }));
-    return { likedAdded, frequentAdded, remaining: 0 };
+    console.log(JSON.stringify({ job: "sync-full", writeMode: cfg.writeMode, likedAdded, frequentAdded, remaining }));
+    return { likedAdded, frequentAdded, remaining };
   } finally {
     await recordActions(db, "sync-full", cfg.writeMode, null, sp.drainActions());
   }
@@ -228,7 +282,8 @@ async function addToFrequent(
   let candidates = rows.filter((r) => !known.has(r.track_id));
   if (!candidates.length) return 0;
 
-  const capacity = await remainingCapacity(sp, playlistId);
+  const placeholder = isPlaceholder(playlistId); // outside live mode, before the playlist exists
+  const capacity = placeholder ? null : await remainingCapacity(sp, playlistId);
   if (capacity !== null && capacity <= 0) {
     console.warn("Frequent playlist at capacity; skipping additions.");
     return 0;
@@ -243,7 +298,7 @@ async function addToFrequent(
     await sp.addToPlaylist(playlistId, batch.map((c) => c.track_uri));
     added += batch.length;
   }
-  if (added && writesState(cfg)) await runAll(db, markTracksInPlaylist(db, playlistId, candidates));
+  if (added && writesState(cfg) && !placeholder) await runAll(db, markTracksInPlaylist(db, playlistId, candidates));
   return added;
 }
 

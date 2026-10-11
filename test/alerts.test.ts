@@ -3,8 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { LAST_ERROR_CHARS, REMIND_AFTER_MS, checkSyncGap, isLoginError, localTime, recordFailure, recordSuccess, remedy, type AlertConfig, type FailingState } from "../src/alerts";
 import { getState } from "../src/db/state";
 import { migrate } from "../src/db/schema";
-import worker from "../src/index";
-import type { Env } from "../src/env";
 import { resetDb } from "./parity/spotify-fixture";
 
 type Sent = { from: unknown; to: unknown; subject: string; text?: string; html?: string };
@@ -155,44 +153,4 @@ describe("sync gap alert", () => {
   });
 });
 
-describe("scheduled handler", () => {
-  const original = globalThis.fetch;
-  afterEach(() => void (globalThis.fetch = original));
-
-  it("emails when a job fails, and still fails the invocation", async () => {
-    const { sent, cfg } = fakeEmail();
-    globalThis.fetch = (async () => new Response('{"error":"invalid_grant","error_description":"Refresh token revoked"}', { status: 400 })) as typeof fetch;
-    const testEnv = {
-      ...(env as unknown as Env),
-      SPOTIFY_ALL_PLAYLIST_ID: "all1",
-      SPOTIFY_FREQUENT_PLAYLIST_ID: "",
-      WRITE_MODE: "live",
-      ALERT_EMAIL: cfg.binding,
-      ALERT_FROM: cfg.from,
-      ALERT_EMAIL_TO: cfg.to,
-    } as Env;
-    await expect(worker.scheduled({ cron: "*/10 * * * *" } as ScheduledEvent, testEnv, {} as ExecutionContext)).rejects.toThrow(/invalid_grant/);
-    expect(sent.map((s) => s.subject)).toEqual(["[spotify-sync] sync failed"]);
-    expect(sent[0]!.text).toContain("Spotify login expired or was revoked");
-  });
-
-  it("runs every daily job even when one fails, then fails the invocation", async () => {
-    const { sent, cfg } = fakeEmail();
-    const testEnv = {
-      ...(env as unknown as Env),
-      SPOTIFY_ALL_PLAYLIST_ID: "all1",
-      WRITE_MODE: "live",
-      TIME_ZONE: "Not/A_Zone", // makes each job's config load throw
-      ALERT_EMAIL: cfg.binding,
-      ALERT_FROM: cfg.from,
-      ALERT_EMAIL_TO: cfg.to,
-    } as Env;
-    await expect(worker.scheduled({ cron: "5 8 * * *" } as ScheduledEvent, testEnv, {} as ExecutionContext)).rejects.toThrow(/TIME_ZONE/);
-    expect(sent.map((s) => s.subject)).toEqual([
-      "[spotify-sync] history-playlists failed",
-      "[spotify-sync] holiday-playlist failed",
-      "[spotify-sync] weekly-digest failed",
-      "[spotify-sync] monthly-recap failed",
-    ]);
-  });
-});
+// The scheduled handler (alerts on job failure, every daily job runs) is tested in test/index.test.ts.

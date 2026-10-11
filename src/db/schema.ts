@@ -213,6 +213,29 @@ const IMPORTS = [
   )`,
 ];
 
+/**
+ * v12, the dashboard replacing deploy vars (tasks/dashboard-plan.md 16.9): the parts that need no env.
+ * migrate() never sees env, so copying SPOTIFY_USER_ID, the playlist ids and TIME_ZONE / AI_EDITOR /
+ * FREQUENT_MIN_PLAYS into `state` and `settings` is a one-time runtime step instead
+ * (importLegacyConfig in src/runtime.ts).
+ * - The sync cursor gets one fixed key, cursor_after_ms:default (Config.cursorKey). Older deployments
+ *   named theirs after SPOTIFY_ALL_PLAYLIST_ID; the newest cursor_after_ms:* wins, the rest go.
+ * - Liked Songs was always on: an instance that already has plays or a Spotify login keeps it on
+ *   (new owners start with it off).
+ * - The one-click reconnect link's `reconnect` key is gone (reconnecting is logging in now).
+ */
+const DASHBOARD_SETTINGS = [
+  `INSERT INTO state (key, value)
+    SELECT 'cursor_after_ms:default', v FROM (
+      SELECT CAST(MAX(CAST(value AS INTEGER)) AS TEXT) AS v FROM state WHERE key GLOB 'cursor_after_ms:*'
+    ) WHERE v IS NOT NULL
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
+  `DELETE FROM state WHERE key GLOB 'cursor_after_ms:*' AND key <> 'cursor_after_ms:default'`,
+  `INSERT OR IGNORE INTO settings (key, value)
+    SELECT 'liked', 'true' WHERE EXISTS (SELECT 1 FROM plays) OR EXISTS (SELECT 1 FROM state WHERE key = 'spotify_refresh_token')`,
+  `DELETE FROM state WHERE key = 'reconnect'`,
+];
+
 interface Migration {
   version: number;
   statements: string[];
@@ -228,6 +251,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 9, statements: EXPORT_PLAY_FIELDS.map(([name, type]) => `ALTER TABLE plays ADD COLUMN ${name} ${type}`) },
   { version: 10, statements: DASHBOARD },
   { version: 11, statements: IMPORTS },
+  { version: 12, statements: DASHBOARD_SETTINGS },
 ];
 
 export function migrationStatements(m: Migration): string[] {
