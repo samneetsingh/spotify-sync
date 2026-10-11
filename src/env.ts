@@ -2,7 +2,8 @@ export interface Env {
   DB: D1Database;
   SPOTIFY_CLIENT_ID: string;
   SPOTIFY_CLIENT_SECRET: string;
-  SPOTIFY_ALL_PLAYLIST_ID: string;
+  /** Legacy, optional: namespace of the sync cursor key (see Config.allPlaylistId). */
+  SPOTIFY_ALL_PLAYLIST_ID?: string;
   SPOTIFY_FREQUENT_PLAYLIST_ID?: string;
   SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID?: string;
   FREQUENT_MIN_PLAYS?: string;
@@ -15,9 +16,9 @@ export interface Env {
   ALERT_EMAIL?: SendEmail;
   ALERT_FROM?: string;
   ALERT_EMAIL_TO?: string;
-  /** The Worker's public origin, e.g. https://spotify.example.com (reconnect links, email images). */
+  /** The Worker's public origin, e.g. https://spotify-sync.example.com (reconnect links, email images). */
   PUBLIC_URL?: string;
-  /** The Spotify account the Worker syncs; the reconnect link only accepts this one. */
+  /** The Spotify account allowed to reconnect (the reconnect link refuses any other). */
   SPOTIFY_USER_ID?: string;
 }
 

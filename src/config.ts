@@ -22,7 +22,11 @@ export interface HistoryPlaylistsConfig {
 
 export interface Config {
   writeMode: WriteMode;
-  /** Only used as the sync cursor key namespace (`cursor_after_ms:<id>`), not as a write target. */
+  /**
+   * Legacy: only the namespace of the sync cursor key (`cursor_after_ms:<id>`), never a write
+   * target. `SPOTIFY_ALL_PLAYLIST_ID` when set (older deployments keep theirs so the key doesn't
+   * change), else DEFAULT_CURSOR_NAMESPACE.
+   */
   allPlaylistId: string;
   frequentPlaylistId: string | null;
   hindiFavoritesPlaylistId: string | null;
@@ -38,12 +42,13 @@ export interface Config {
   historyPlaylists: HistoryPlaylistsConfig;
 }
 
-// Defaults mirror src/config/__init__.py + config.yaml.
+export const DEFAULT_CURSOR_NAMESPACE = "default";
+
+// Defaults mirror the original Python service's config.
 export function loadConfig(env: Env): Config {
-  if (!env.SPOTIFY_ALL_PLAYLIST_ID) throw new Error("SPOTIFY_ALL_PLAYLIST_ID is required");
   return {
     writeMode: parseWriteMode(env.WRITE_MODE),
-    allPlaylistId: env.SPOTIFY_ALL_PLAYLIST_ID,
+    allPlaylistId: env.SPOTIFY_ALL_PLAYLIST_ID || DEFAULT_CURSOR_NAMESPACE,
     frequentPlaylistId: env.SPOTIFY_FREQUENT_PLAYLIST_ID || null,
     hindiFavoritesPlaylistId: env.SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID || null,
     frequentMinPlays: positiveInt("FREQUENT_MIN_PLAYS", env.FREQUENT_MIN_PLAYS, 2),
