@@ -1,9 +1,11 @@
 // The export parser shared by the CLI script and the dashboard import (src/import/parse.ts).
 import { describe, expect, it } from "vitest";
 import { ExportCollector, MIN_MS_PLAYED, SPAN_TAIL_MS, isAudioHistoryFile, parseRecord, parseRecordsText, parseTimestamp, playKey } from "../../src/import/parse";
-import accountData from "./fixtures/StreamingHistory_music_0.json";
-import audio from "./fixtures/Streaming_History_Audio_2019-2020_0.json";
-import endsong from "./fixtures/endsong_0.json";
+// Synthetic files in the shapes of Streaming_History_Audio_*.json, endsong_*.json and the account
+// data's StreamingHistory_music_*.json (renamed: .gitignore keeps real export files out of git).
+import accountData from "./fixtures/account-data-format.json";
+import audio from "./fixtures/audio-format.json";
+import endsong from "./fixtures/endsong-format.json";
 import { audioRecord } from "./helpers";
 
 const text = (v: unknown) => JSON.stringify(v, null, 2);
