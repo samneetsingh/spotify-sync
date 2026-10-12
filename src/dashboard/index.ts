@@ -1,5 +1,6 @@
-// The owner dashboard: GET / (landing or home), GET/POST /settings, GET /activity (with the
-// `advanced` setting on) and the POST /actions/*. Auth, import and 404s are handled
+// The owner dashboard: GET / (landing or home, where the guided tour starts), GET /welcome (the tour
+// again) and POST /welcome/done, GET/POST /settings, GET /activity (with the `advanced` setting on)
+// and the POST /actions/*. Auth, import and 404s are handled
 // elsewhere (src/index.ts routes in order: Origin check, auth, session, import, dashboard).
 //
 // renderPage (src/dashboard/layout.tsx) is shared with the auth and import pages. Escaping
@@ -19,6 +20,7 @@ import { loadHome } from "./home-data";
 import { HomeView } from "./home-view";
 import { PREVIEW_COOLDOWN_MS, recreatePlaylist, sendPreview, syncNow } from "./actions";
 import { renderLanding } from "./landing";
+import { finishWelcome, onboarded, replayTour, TOUR_SCRIPT, TourData } from "./onboarding";
 import { renderPage, type Notice, type PageOptions } from "./layout";
 import { render } from "./render";
 import { settingsBody, type SettingsView } from "./settings";
@@ -72,10 +74,10 @@ export function flashNotice(url: URL, env: Env): Notice | undefined {
  * Spotify calls, capped at 2.5 s; a warm view makes none).
  */
 async function homePage(env: Env, ctx: ExecutionContext, session: Session, notice: Notice | undefined): Promise<Response> {
-  const settings = await loadSettings(env.DB, env);
+  const [settings, toured] = await Promise.all([loadSettings(env.DB, env), onboarded(env.DB)]);
   const data = await fillArt(env, ctx, await loadHome(env.DB, { now: Date.now(), timeZone: settings.values.timeZone }));
-  const body = render(HomeView({ data, writeMode: parseWriteMode(env.WRITE_MODE) }));
-  return renderPage({ title: "Home", session, nav: "home", layout: "wide", hideTitle: true, body, notice, showActivity: settings.values.advanced });
+  const body = render(HomeView({ data, writeMode: parseWriteMode(env.WRITE_MODE) })) + render(TourData({ auto: !toured, session }));
+  return renderPage({ title: "Home", session, nav: "home", layout: "wide", hideTitle: true, body, notice, showActivity: settings.values.advanced, scripts: [TOUR_SCRIPT] });
 }
 
 /** The History import section for Settings: "" without the import bindings or when it can't be read. */
@@ -92,9 +94,9 @@ async function importSectionHtml(env: Env, timeZone: string): Promise<string> {
 
 /**
  * The settings page: the settings, the live state (loadStatus) and the import card. `extra` is the
- * refused save's posted form and errors, or the first visit's welcome.
+ * refused save's posted form and errors.
  */
-async function renderSettings(env: Env, session: Session, extra: Pick<SettingsView, "submitted" | "errors" | "welcome">, page: Pick<PageOptions, "notice" | "status">): Promise<Response> {
+async function renderSettings(env: Env, session: Session, extra: Pick<SettingsView, "submitted" | "errors">, page: Pick<PageOptions, "notice" | "status">): Promise<Response> {
   const [settings, status] = await Promise.all([loadSettings(env.DB, env), loadStatus(env.DB)]);
   const importHtml = await importSectionHtml(env, settings.values.timeZone);
   const email = emailConfig(env, settings.values);
@@ -108,7 +110,16 @@ async function renderSettings(env: Env, session: Session, extra: Pick<SettingsVi
     importHtml,
     ...extra,
   });
-  return renderPage({ title: "Settings", session, nav: "settings", layout: "wide", body, showActivity: settings.values.advanced, scripts: ["/settings-form.js"], ...page });
+  return renderPage({
+    title: "Settings",
+    session,
+    nav: "settings",
+    layout: "wide",
+    body: body + render(TourData({ auto: false, session })),
+    showActivity: settings.values.advanced,
+    scripts: ["/settings-form.js", TOUR_SCRIPT],
+    ...page,
+  });
 }
 
 /** POST /settings: saves through saveSettings; a refused save shows the form again with the errors. */
@@ -128,12 +139,12 @@ async function activityPage(env: Env, session: Session, url: URL): Promise<Respo
 
 // ---------------------------------------------------------------------------- router
 
-const PAGES = new Set(["/", "/settings", "/activity"]);
-const POSTS = new Set(["/settings", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"]);
+const PAGES = new Set(["/", "/welcome", "/settings", "/activity"]);
+const POSTS = new Set(["/settings", "/welcome/done", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"]);
 
 /**
- * GET / (landing without a session, home with one), GET/POST /settings, GET /activity and POST
- * /actions/*; null for any other path. Owner pages without
+ * GET / (landing without a session, home with one), GET /welcome and POST /welcome/done, GET/POST
+ * /settings, GET /activity and POST /actions/*; null for any other path. Owner pages without
  * a session: authRequired(request). The router has already checked Origin on non-GET requests.
  */
 export async function handleDashboard(request: Request, env: Env, ctx: ExecutionContext, session: Session | null): Promise<Response | null> {
@@ -147,11 +158,13 @@ export async function handleDashboard(request: Request, env: Env, ctx: Execution
 
   if (read && PAGES.has(path)) {
     if (path === "/") return homePage(env, ctx, session, flashNotice(url, env));
-    if (path === "/settings") return renderSettings(env, session, { welcome: url.searchParams.get("welcome") === "1" }, { notice: flashNotice(url, env) });
+    if (path === "/welcome") return replayTour();
+    if (path === "/settings") return renderSettings(env, session, {}, { notice: flashNotice(url, env) });
     return activityPage(env, session, url);
   }
   if (request.method === "POST" && POSTS.has(path)) {
     if (path === "/settings") return saveSettingsForm(request, env, session);
+    if (path === "/welcome/done") return finishWelcome(request, env, importEnabled(env));
     if (path === "/actions/sync") return syncNow(env);
     const form = await request.formData();
     if (path === "/actions/preview") return sendPreview(form, env, await loadSettings(env.DB, env));

@@ -270,7 +270,7 @@ describe("claiming through /auth/callback", () => {
     const run = testCtx();
     const res = await worker.fetch(get(`/auth/callback?code=abc&state=${state}`, cookie, { "User-Agent": "Phone" }), e, run.ctx);
     expect(res.status).toBe(303);
-    expect(res.headers.get("Location")).toBe("/settings?welcome=1");
+    expect(res.headers.get("Location")).toBe("/"); // Home, where the guided tour starts
     expect(calls.map((c) => c.url)).toEqual(["https://accounts.spotify.com/api/token", "https://api.spotify.com/v1/me"]);
 
     expect(await getState(env.DB, "owner:spotify_id")).toBe("new-owner");

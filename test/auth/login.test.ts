@@ -14,6 +14,7 @@ beforeAll(() => migrate(env.DB));
 beforeEach(async () => {
   await resetDb(env.DB);
   await setStateRow("owner:spotify_id", "owner-id");
+  await setStateRow("onboarding:done", "2026-10-01T00:00:00.000Z"); // logins go to `next` (see the guided tour test below)
 });
 afterEach(() => void (globalThis.fetch = original));
 
@@ -54,6 +55,14 @@ describe("login as the owner", () => {
 
     const [event] = await recentActivity(env.DB, 5);
     expect(event).toMatchObject({ kind: "account", ok: true, summary: "Logged in as Owner Name (owner-id)" });
+  });
+
+  it("lands on Home (where the guided tour starts) instead of `next` until the tour is finished or skipped", async () => {
+    await env.DB.prepare("DELETE FROM state WHERE key = 'onboarding:done'").run();
+    const { res } = await logIn({ next: "/activity" });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("Location")).toBe("/");
+    expect(setCookies(res).has("__Host-session")).toBe(true);
   });
 
   it.each([["//evil.test"], ["/\\evil.test"], ["https://evil.test"], ["/login"]])("never redirects off-site or back into auth (next=%s)", async (next) => {

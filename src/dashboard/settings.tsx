@@ -45,9 +45,10 @@ export interface SettingsView {
   errors?: Partial<Record<SettingKey, string>>;
   /** The History import section's HTML (already escaped); empty when import isn't set up. */
   importHtml?: string;
-  /** First visit after the claim: the "your first sync runs within 10 minutes" banner. */
-  welcome?: boolean;
 }
+
+/** What a setting's control needs (the onboarding renders controls too). */
+export type ControlView = Pick<SettingsView, "settings" | "env" | "submitted" | "errors">;
 
 /** Where a value comes from; a value changed here shows only its Reset button. */
 const SOURCE_LABEL: Record<Exclude<SettingSource, "dashboard">, string> = { deploy: "From deploy config", default: "Default" };
@@ -67,7 +68,7 @@ function timeZones(current: string): Map<string, string[]> {
 }
 
 /** The value to show: what was just posted (after a refused save), else the effective value. */
-function shown(v: SettingsView, def: SettingDef): string | boolean {
+function shown(v: ControlView, def: SettingDef): string | boolean {
   if (v.submitted?.has(def.key)) {
     const posted = v.submitted.getAll(def.key).at(-1);
     return def.type === "boolean" ? posted === "true" : String(posted ?? "");
@@ -77,7 +78,7 @@ function shown(v: SettingsView, def: SettingDef): string | boolean {
 }
 
 /** Where the value comes from, or for a value changed here, Reset (which submits the key's own form). */
-function MetaRow({ v, def }: { v: SettingsView; def: SettingDef }) {
+function MetaRow({ v, def }: { v: ControlView; def: SettingDef }) {
   const source = v.settings.source[def.key];
   return (
     <div class="meta-row">
@@ -93,7 +94,7 @@ function MetaRow({ v, def }: { v: SettingsView; def: SettingDef }) {
 }
 
 /** A refused save's message for `def`; a missing confirmation points at the box right below. */
-function errorFor(v: SettingsView, def: SettingDef): string | undefined {
+function errorFor(v: ControlView, def: SettingDef): string | undefined {
   const error = v.errors?.[def.key];
   if (!error || !def.confirmOn) return error;
   const wantsOn = v.submitted?.getAll(def.key).at(-1) === "true";
@@ -116,8 +117,11 @@ function TimeZoneSelect({ id, name, value, describedBy, invalid, form }: { id: s
   );
 }
 
-/** One setting. `form`: the settings form's id, for a control rendered outside that form (General). */
-function Control({ v, def, line, form }: { v: SettingsView; def: SettingDef; line?: Child; form?: string }) {
+/**
+ * One setting. `form`: the settings form's id, for a control rendered outside that form (General).
+ * `plain`: without the source and Reset row (the onboarding).
+ */
+export function Control({ v, def, line, form, plain }: { v: ControlView; def: SettingDef; line?: Child; form?: string; plain?: boolean }) {
   const id = `f-${def.key}`;
   const error = errorFor(v, def);
   const describedBy = `d-${def.key}${error ? ` e-${def.key}` : ""}`;
@@ -172,7 +176,7 @@ function Control({ v, def, line, form }: { v: SettingsView; def: SettingDef; lin
         </div>
         <label for={id}>{def.label}</label>
         {desc}
-        <MetaRow v={v} def={def} />
+        {plain ? null : <MetaRow v={v} def={def} />}
         {errorText}
         {confirm}
       </div>
@@ -204,7 +208,7 @@ function Control({ v, def, line, form }: { v: SettingsView; def: SettingDef; lin
       <label for={id}>{def.label}</label>
       {desc}
       {input}
-      <MetaRow v={v} def={def} />
+      {plain ? null : <MetaRow v={v} def={def} />}
       {errorText}
     </div>
   );
@@ -255,17 +259,17 @@ export function Settings({ v }: { v: SettingsView }) {
           ))}
         </div>
         {group === "Emails" ? <p class="note">{emailsNote(sv, !!v.env.OPENAI_API_KEY)}</p> : null}
+        {group === "General" ? (
+          <p class="note">
+            <a href="/?tour=0">Take the tour again</a>
+          </p>
+        ) : null}
       </fieldset>
     ) : null;
   };
   const lines = settingLines(sv, Object.fromEntries(SETTING_DEFS.map((d) => [d.key, d.label])) as Record<SettingKey, string>);
   return (
     <>
-      {v.welcome ? (
-        <div class="notice notice-ok" role="status">
-          <strong>You're connected.</strong> Your first sync runs within 10 minutes with these settings. Change anything now or later.
-        </div>
-      ) : null}
       {v.settings.problems.length ? (
         <div class="notice notice-warn" role="status">
           Some saved or deployed values aren't valid and are being ignored:

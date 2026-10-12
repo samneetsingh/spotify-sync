@@ -107,11 +107,10 @@ describe("settings page rendering", () => {
     expect(html.match(/name="reset"/g)).toHaveLength(1);
   });
 
-  it("hides the AI editor without an OpenAI key and lists problems, the welcome banner and (Advanced) account actions", () => {
+  it("hides the AI editor without an OpenAI key and lists problems and (Advanced) account actions", () => {
     expect(render()).not.toContain("f-aiEditor");
     expect(render({ env: testEnv({ OPENAI_API_KEY: "sk-test" }) })).toContain(`id="f-aiEditor"`);
-    const html = render({ welcome: true, settings: stubSettings({ advanced: true }, {}, [`TIME_ZONE "Mars/Base" isn't a time zone <b>`]) });
-    expect(html).toContain("Your first sync runs within 10 minutes");
+    const html = render({ settings: stubSettings({ advanced: true }, {}, [`TIME_ZONE "Mars/Base" isn't a time zone <b>`]) });
     expect(html).toContain("Mars/Base");
     expect(html).not.toContain("<b>");
     expect(html).toMatch(/action="\/logout\/all"><button type="submit" class="btn btn-danger">Log out everywhere/);

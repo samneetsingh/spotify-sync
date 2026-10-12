@@ -21,7 +21,7 @@ import { loadSettings } from "../settings";
 import { constantTimeEqual } from "../utils/crypto";
 import { canSendClaim, CLAIM_KEY, isValidClaimNonce, resendClaimEmail, sentTime } from "./claim";
 import { canLogIn, clearOAuthCookie, completeOAuth, publicOrigin, readOAuthCookie, safeNext, startOAuth, type OAuthState, type SpotifyLogin } from "./oauth";
-import { getOwner, OWNER_KEY, saveLoginStatements, type Owner } from "./owner";
+import { getOwner, ONBOARDING_KEY, OWNER_KEY, saveLoginStatements, type Owner } from "./owner";
 import {
   alreadySetUpPage,
   checkEmailPage,
@@ -168,8 +168,8 @@ async function completeClaim(c: LoginContext): Promise<Response> {
   console.log(JSON.stringify({ auth: "claimed", account: me.id }));
   await quietly("activity", () => logActivity(db, "account", `Set up spotify-sync for ${accountName(me)}`, true, undefined, now));
   c.ctx.waitUntil(sendWelcome(env, me, now));
-  // No immediate sync: the first cron sync runs within 10 minutes, after the owner reviewed the defaults.
-  return redirect303("/settings?welcome=1", sessionHeaders(cookie, clear));
+  // No immediate sync: the first cron sync runs within 10 minutes. Home starts the guided tour.
+  return redirect303("/", sessionHeaders(cookie, clear));
 }
 
 /** The owner (and only the owner) logs in; the new refresh token is always saved. */
@@ -188,7 +188,9 @@ async function completeLogin(c: LoginContext, owner: Owner | null): Promise<Resp
   // Reconnecting after a failing sync: sync right away with the new token; a success clears the
   // failing state and sends the "recovered" email.
   if (syncFailing) c.ctx.waitUntil(withJob(env, "sync", runSync).then(() => undefined, () => undefined));
-  return redirect303(c.state.n ?? "/", sessionHeaders(cookie, clear));
+  // Until the guided tour is finished or skipped, every login lands on Home, where it starts.
+  const onboarded = (await getState(db, ONBOARDING_KEY)) !== null;
+  return redirect303(onboarded ? (c.state.n ?? "/") : "/", sessionHeaders(cookie, clear));
 }
 
 function wrongAccount(c: LoginContext): Response {

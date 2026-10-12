@@ -106,7 +106,7 @@ npm run deploy   # configure + wrangler deploy
 
 The custom domain is created on deploy. Open `https://<your domain>`: it says **Almost ready**. Within 10 minutes the Worker emails `ALERT_EMAIL_TO` a setup link (check spam). Click **Connect Spotify** and log in: whoever completes the link with Spotify becomes the owner, so it goes only to the address you configured, works once, and expires after 7 days. The cron sends it at most 3 times; the landing page's **Resend** button sends another (once an hour, 5 a day).
 
-You land on **Settings** with a welcome banner and get a welcome email. Review the defaults; the first sync runs within 10 minutes and backfills the last 24 hours (Spotify's recently-played history only reaches back 50 plays). From then on, `https://<your domain>` shows **Log in with Spotify**, and only the owner's Spotify account can log in.
+You land on Home with a short **guided tour** (and get a welcome email): it spotlights the main parts of Home, then your playlists and emails in Settings (flip them right there; the tour saves them), the history import and Advanced. Every login starts it until you finish or skip it; **Take the tour again** in Settings replays it. The first sync runs within 10 minutes and backfills the last 24 hours (Spotify's recently-played history only reaches back 50 plays). From then on, `https://<your domain>` shows **Log in with Spotify**, and only the owner's Spotify account can log in.
 
 The Spotify refresh token lives in the D1 `state` table, not in a secret, so the Worker can save rotated tokens itself. Watch the jobs in Workers Logs or with `npx wrangler tail -c wrangler.generated.toml`.
 

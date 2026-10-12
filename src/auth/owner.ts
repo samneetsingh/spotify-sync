@@ -7,6 +7,8 @@ import type { Env } from "../env";
 
 export const OWNER_KEY = "owner:spotify_id";
 export const OWNER_NAME_KEY = "owner:display_name";
+/** Set (to an ISO time) when the owner finishes or skips the guided tour; until then every login lands on Home, where it starts. */
+export const ONBOARDING_KEY = "onboarding:done";
 
 /** The effective owner: SPOTIFY_USER_ID when set ("config"), else `state` owner:spotify_id ("claimed"). */
 export interface Owner {
