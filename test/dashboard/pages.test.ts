@@ -1,13 +1,12 @@
-// The dashboard router and pages: landing variants, auth gating, CSP/escaping, methods.
+// The dashboard router and pages: landing variants, auth gating, CSP/escaping, methods. Manage is in
+// manage.test.tsx, the settings toggle in toggle.test.ts.
 
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { handleDashboard, renderPage, ui } from "../../src/dashboard";
-import { homeBody, type HomeView } from "../../src/dashboard/home";
-import { loadStatus } from "../../src/dashboard/status";
 import { migrate } from "../../src/db/schema";
 import { resetDb } from "../parity/spotify-fixture";
-import { ctx, expectSafePage, fakeBinding, get, ORIGIN, post, session, settingsReady, stubSettings, testEnv } from "./helpers";
+import { ctx, expectSafePage, fakeBinding, get, ORIGIN, post, session, settingsReady, testEnv } from "./helpers";
 
 const XSS = `<script>alert("x")</script>`;
 const NOW = Date.UTC(2026, 9, 11, 19); // Sun Oct 11 2026, 12:00 PDT
@@ -25,7 +24,7 @@ describe("landing page (no session)", () => {
     const body = await expectSafePage(res);
     expect(body).toContain('href="/login"');
     expect(body).toContain("Log in with Spotify");
-    expect(body).toContain("Only the owner's Spotify account can log in.");
+    expect(body).toContain("Only the owner&#39;s Spotify account can log in.");
     expect(body).not.toContain("Sam Owner");
     expect(body).not.toContain("owner-1");
     expect(body).not.toContain('aria-label="Dashboard"'); // no nav for visitors
@@ -63,23 +62,25 @@ describe("landing page (no session)", () => {
 });
 
 describe("owner pages without a session", () => {
-  it.each(["/settings", "/activity"])("GET %s redirects to the login and back", async (path) => {
+  it.each(["/manage", "/settings", "/activity"])("GET %s redirects to the login and back", async (path) => {
     const res = (await handleDashboard(get(`${path}?welcome=1`), testEnv(), ctx, null))!;
     expect(res.status).toBe(303);
     expect(res.headers.get("Location")).toBe(`/login?next=${encodeURIComponent(`${path}?welcome=1`)}`);
   });
 
-  it.each(["/settings", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"])("POST %s is refused with 401 and changes nothing", async (path) => {
-    const res = (await handleDashboard(post(path, { kind: "week", key: "holiday", digestWeekly: "false" }), testEnv(), ctx, null))!;
+  it.each(["/settings", "/settings/toggle", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"])("POST %s is refused with 401 and changes nothing", async (path) => {
+    const res = (await handleDashboard(post(path, { kind: "week", key: "digestWeekly", value: "false", digestWeekly: "false" }), testEnv(), ctx, null))!;
     expect(res.status).toBe(401);
     const runs = await env.DB.prepare("SELECT COUNT(*) AS n FROM sync_runs").first<{ n: number }>();
     expect(runs!.n).toBe(0);
+    const settings = await env.DB.prepare("SELECT COUNT(*) AS n FROM settings").first<{ n: number }>();
+    expect(settings!.n).toBe(0);
   });
 });
 
 describe("routing", () => {
   it("ignores paths it doesn't own", async () => {
-    for (const path of ["/nope", "/import", "/login", "/actions/unknown", "/settings/x"]) {
+    for (const path of ["/nope", "/import", "/login", "/actions/unknown", "/settings/x", "/manage/x", "/home"]) {
       expect(await handleDashboard(get(path), testEnv(), ctx, session)).toBeNull();
     }
   });
@@ -93,6 +94,13 @@ describe("routing", () => {
     expect(postHome.headers.get("Allow")).toBe("GET, HEAD");
     const del = (await handleDashboard(new Request(`${ORIGIN}/settings`, { method: "DELETE" }), testEnv(), ctx, session))!;
     expect(del.headers.get("Allow")).toBe("GET, HEAD, POST");
+    const getToggle = (await handleDashboard(get("/settings/toggle?key=digestWeekly&value=false"), testEnv(), ctx, session))!;
+    expect(getToggle.status).toBe(405);
+    expect(getToggle.headers.get("Allow")).toBe("POST");
+    expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM settings").first<{ n: number }>()).toEqual({ n: 0 });
+    const postManage = (await handleDashboard(post("/manage"), testEnv(), ctx, session))!;
+    expect(postManage.status).toBe(405);
+    expect(postManage.headers.get("Allow")).toBe("GET, HEAD");
   });
 });
 
@@ -121,84 +129,37 @@ describe("renderPage", () => {
   });
 });
 
-describe("home page", () => {
-  async function seedHostileData() {
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO playlists(playlist_id, name, artist_name, playlist_type) VALUES('pl1', ?1, ?1, 'artist')").bind(`${XSS} This Is`),
-      env.DB.prepare("INSERT INTO activity(at, kind, ok, summary, detail) VALUES(?1, 'job', 0, ?2, ?2)").bind(NOW - 60_000, `Track ${XSS}`),
-      env.DB.prepare("INSERT INTO state(key, value) VALUES('alert_failing:sync', ?1)").bind(JSON.stringify({ since: NOW - 3_600_000, lastSent: 0, failures: 3, lastError: `Spotify said ${XSS}` })),
-      env.DB.prepare("INSERT INTO sync_runs(started_at, finished_at, status, plays_fetched, error) VALUES(datetime('now'), datetime('now'), 'fail', 0, ?1)").bind(XSS),
-    ]);
-  }
-
-  const view = async (over: Partial<HomeView> = {}): Promise<HomeView> => ({
-    session,
-    status: await loadStatus(env.DB, NOW),
-    values: stubSettings().values,
-    writeMode: "live",
-    email: { configured: true, to: "you@example.com" },
-    aiAvailable: false,
-    importHtml: "",
-    ...over,
-  });
-
-  it("escapes Spotify names, activity and errors", async () => {
-    await seedHostileData();
-    const html = homeBody(await view());
-    expect(html).not.toContain("<script>");
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).toContain("Sync failing");
-  });
-
-  it("never reads the refresh token's value", async () => {
-    const status = await loadStatus(env.DB, NOW);
-    expect(status.connected).toBe(true);
-    expect(JSON.stringify(status)).not.toContain("test-refresh");
-  });
-
-  it("asks to reconnect when the sync fails on Spotify's login", async () => {
-    await env.DB.prepare("INSERT INTO state(key, value) VALUES('alert_failing:sync', ?1)")
-      .bind(JSON.stringify({ since: NOW - 3_600_000, lastSent: 0, failures: 2, lastError: "Token refresh failed: 400 invalid_grant" }))
-      .run();
-    const html = homeBody(await view());
-    expect(html).toContain("Disconnected");
-    expect(html).toContain(`<a class="btn btn-primary" href="/login">Reconnect Spotify</a>`);
-  });
-
-  it("offers Recreate only for an owned playlist that was deleted in Spotify", async () => {
-    await env.DB.prepare("INSERT INTO state(key, value) VALUES('playlist:on_this_day', 'off'), ('playlist:forgotten_favorites', 'pl-ff')").run();
-    const html = homeBody(await view());
-    expect(html.match(/action="\/actions\/playlist\/recreate"/g)).toHaveLength(1);
-    expect(html).toContain('value="on_this_day"');
-    expect(html).toContain('href="https://open.spotify.com/playlist/pl-ff"');
-  });
-
-  it("hides previews when email isn't set up in live mode and shows AI usage when available", async () => {
-    await env.DB.prepare("INSERT INTO state(key, value) VALUES(?1, '3')").bind(`editor:calls:2026-10`).run();
-    const html = homeBody(await view({ email: { configured: false, to: null }, aiAvailable: true, values: stubSettings({ aiEditor: true }).values }));
-    expect(html).not.toContain("/actions/preview");
-    expect(html).toContain("Email isn&#39;t set up");
-    expect(html).toContain("3 of 10 AI edits used this month.");
-  });
-
-  it.skipIf(!settingsReady)("[integration: WP-B settings] renders through the router with the security headers", async () => {
-    await seedHostileData();
-    const res = (await handleDashboard(get("/"), testEnv(), ctx, session))!;
+describe("home page (until the new Home is wired)", () => {
+  it("links to Manage and shows the flash message", async () => {
+    const res = (await handleDashboard(get("/?ok=saved"), testEnv(), ctx, session))!;
     expect(res.status).toBe(200);
     const body = await expectSafePage(res);
-    expect(body).not.toContain("<script>alert");
     expect(body).toContain('aria-current="page">Home');
+    expect(body).toContain(`<a class="btn btn-primary" href="/manage">`);
+    expect(body).toContain(`role="status">Settings saved.`);
   });
 });
 
-describe.skipIf(!settingsReady)("[integration: WP-B settings] settings and activity pages", () => {
-  it("render for a stub session with escaped content", async () => {
-    await env.DB.prepare("INSERT INTO activity(at, kind, ok, summary, detail) VALUES(?1, 'job', 0, ?2, ?2)").bind(NOW, XSS).run();
-    for (const path of ["/settings?welcome=1", "/activity"]) {
-      const res = (await handleDashboard(get(path), testEnv(), ctx, session))!;
+describe.skipIf(!settingsReady)("[integration: WP-B settings] every page", () => {
+  it("renders for a stub session with escaped content and no style= attributes", async () => {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO activity(at, kind, ok, summary, detail) VALUES(?1, 'job', 0, ?2, ?2)").bind(NOW, XSS),
+      env.DB.prepare("INSERT INTO sync_runs(started_at, finished_at, status, plays_fetched, error) VALUES(datetime('now'), datetime('now'), 'fail', 0, ?1)").bind(XSS),
+      env.DB.prepare("INSERT INTO playlists(playlist_id, name, artist_name, playlist_type) VALUES('pl1', ?1, ?1, 'artist')").bind(XSS),
+    ]);
+    const evil = { ...session, displayName: XSS };
+    for (const path of ["/", "/manage", "/settings?welcome=1", "/activity"]) {
+      const res = (await handleDashboard(get(path), testEnv(), ctx, evil))!;
       expect(res.status).toBe(200);
       const body = await expectSafePage(res);
       expect(body).not.toContain("<script>alert");
     }
+  });
+
+  it("renders every landing state without style= attributes", async () => {
+    const states = [testEnv({ SPOTIFY_USER_ID: "owner-1" }), unclaimed(), unclaimed({ ALERT_EMAIL: undefined })];
+    const titles: string[] = [];
+    for (const e of states) titles.push((await expectSafePage((await handleDashboard(get("/"), e, ctx, null))!)).match(/<h1>([^<]+)<\/h1>/)![1]);
+    expect(titles).toEqual(["Your music, kept in sync", "Almost ready", "Still being set up"]);
   });
 });

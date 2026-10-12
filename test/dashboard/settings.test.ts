@@ -4,15 +4,16 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { handleDashboard } from "../../src/dashboard";
-import { settingsBody, type SettingsView } from "../../src/dashboard/settings-page";
+import { settingsBody, type SettingsView } from "../../src/dashboard/settings";
 import { migrate } from "../../src/db/schema";
-import { LIKED_SONGS_WARNING, SETTING_GROUPS } from "../../src/settings";
+import { LIKED_SONGS_WARNING, SETTING_DEFS, SETTING_GROUPS } from "../../src/settings";
 import { resetDb } from "../parity/spotify-fixture";
 import { ctx, expectSafePage, get, ORIGIN, session, settingsReady, stubSettings, testEnv } from "./helpers";
 
 beforeAll(() => migrate(env.DB));
 beforeEach(() => resetDb(env.DB));
 
+const XSS = `<script>alert("x")</script>`;
 const render = (over: Partial<SettingsView> = {}) => settingsBody({ session, settings: stubSettings(), env: testEnv(), ...over });
 
 /** The fields a browser would submit for the settings form in `html` (DOM order; checked boxes only). */
@@ -25,7 +26,7 @@ function formFields(html: string): Array<[string, string]> {
     const name = attr("name");
     if (!name || /\bform="/.test(attrs)) continue;
     if (m[2] !== undefined) {
-      out.push([name, m[3]!.match(/<option value="([^"]*)" selected>/)![1]!]);
+      out.push([name, m[3]!.match(/<option value="([^"]*)" selected="">/)![1]!]);
     } else if (attr("type") === "checkbox") {
       if (/\bchecked\b/.test(attrs)) out.push([name, attr("value")!]);
     } else {
@@ -52,18 +53,18 @@ describe("settings page rendering", () => {
   it("posts a hidden false before each checkbox's true, and labels every control", () => {
     const html = render();
     expect(html).toContain(
-      `<input type="hidden" name="frequent" value="false"><input class="toggle" type="checkbox" id="f-frequent" name="frequent" value="true" aria-describedby="d-frequent" checked>`,
+      `<input type="hidden" name="frequent" value="false"/><input class="toggle" type="checkbox" id="f-frequent" name="frequent" value="true" aria-describedby="d-frequent" checked=""/>`,
     );
     for (const id of html.matchAll(/<(?:input|select)[^>]*\bid="(f-[^"]+)"/g)) expect(html).toContain(`<label for="${id[1]}">`);
     expect(html).toMatch(/<select id="f-timeZone" name="timeZone"[^>]*><option value="UTC">UTC<\/option>/);
-    expect(html).toContain(`<option value="America/Los_Angeles" selected>America/Los Angeles</option>`);
+    expect(html).toContain(`<option value="America/Los_Angeles" selected="">America/Los Angeles</option>`);
     expect(html).toMatch(/<input type="number"[^>]*name="frequentMinPlays" value="5" min="2" max="100"/);
   });
 
   it("asks for the Liked Songs confirmation only when switching it on", () => {
     const off = render();
     expect(off).toContain(LIKED_SONGS_WARNING.replaceAll("'", "&#39;"));
-    expect(off).toContain(`<input type="checkbox" name="confirm_liked" value="yes"> I understand. Turn it on.`);
+    expect(off).toContain(`<input type="checkbox" name="confirm_liked" value="yes"/> I understand. Turn it on.`);
     expect(off).toMatch(/<div class="setting gated" id="s-liked">/);
     const on = render({ settings: stubSettings({ liked: true }) });
     expect(on).not.toContain("confirm_liked");
@@ -79,7 +80,7 @@ describe("settings page rendering", () => {
     // A missing confirmation points at the box instead of repeating the whole warning.
     expect(html).toMatch(/<div class="notice notice-error" role="alert" id="errors">[^]*<a href="#f-liked">Add played songs to Liked Songs<\/a>: Tick “I understand” below to turn this on\./);
     expect(html).toContain(`<p class="field-error" id="e-liked">Tick “I understand” below to turn this on.</p>`);
-    expect(html).toMatch(/id="f-liked" name="liked" value="true" aria-describedby="d-liked e-liked" checked aria-invalid="true"/);
+    expect(html).toMatch(/id="f-liked" name="liked" value="true" aria-describedby="d-liked e-liked" checked="" aria-invalid="true"/);
     expect(html).toContain(`<div class="confirm invalid" id="c-liked">`);
     expect(html).toMatch(/name="frequentMinPlays" value="500"[^>]*aria-invalid="true"/);
     expect(html).toContain(`<p class="field-error" id="e-frequentMinPlays">Use a number from 2 to 100.</p>`);
@@ -88,7 +89,7 @@ describe("settings page rendering", () => {
   it("tags each value's source and offers Reset for dashboard changes through its own form", () => {
     const html = render({ settings: stubSettings({ frequentMinPlays: 7 }, { frequentMinPlays: "dashboard", timeZone: "deploy" }) });
     expect(html).toContain(`<span class="source source-dashboard">Changed here</span><button type="submit" form="reset-frequentMinPlays"`);
-    expect(html).toContain(`<form id="reset-frequentMinPlays" method="post" action="/settings" hidden><input type="hidden" name="reset" value="frequentMinPlays"></form>`);
+    expect(html).toContain(`<form id="reset-frequentMinPlays" method="post" action="/settings" hidden=""><input type="hidden" name="reset" value="frequentMinPlays"/></form>`);
     expect(html).toContain(`<span class="source source-deploy">From deploy config</span>`);
     expect(html.match(/name="reset"/g)).toHaveLength(1);
   });
@@ -102,6 +103,26 @@ describe("settings page rendering", () => {
     expect(html).not.toContain("<b>");
     expect(html).toMatch(/action="\/logout\/all"><button type="submit" class="btn btn-danger">Log out everywhere/);
     expect(html).toMatch(/action="\/logout"><button/);
+  });
+});
+
+describe("settings page contract", () => {
+  it("keeps every setting's ids and names (links such as /settings#s-liked rely on them)", () => {
+    const e = testEnv({ OPENAI_API_KEY: "sk-test" });
+    const html = render({ env: e });
+    for (const def of SETTING_DEFS) {
+      expect(html).toContain(`id="s-${def.key}"`);
+      expect(html).toContain(`id="f-${def.key}" name="${def.key}"`);
+      expect(html).toContain(`<p class="desc" id="d-${def.key}">`);
+    }
+    expect(html).toContain(`<form method="post" action="/settings" id="settings">`);
+  });
+
+  it("escapes the account's display name and id", () => {
+    const html = render({ session: { ...session, displayName: XSS, spotifyId: `id"><b>x` } });
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<b>x");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
 

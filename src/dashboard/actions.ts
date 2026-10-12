@@ -1,6 +1,6 @@
 // Owner actions (POST, Origin-checked by the router): sync now, digest previews, recreate a
-// playlist that was deleted in Spotify. Each logs to `activity` and redirects back with a fixed
-// flash code (no user content in URLs): post/redirect/get.
+// playlist that was deleted in Spotify. Each logs to `activity` and redirects back to /manage with a
+// fixed flash code (no user content in URLs): post/redirect/get.
 
 import { logActivity } from "../activity";
 import { loadConfig } from "../config";
@@ -14,15 +14,15 @@ import { editorConfig, emailConfig, quietly, withJob } from "../runtime";
 import type { EffectiveSettings } from "../settings";
 import { SpotifyClient } from "../spotify/client";
 import { OWNED_PLAYLISTS, isOwnedPlaylistKey } from "./status";
+import { SYNC_BUSY_MS } from "./sync-state";
 
-/** A sync started this recently and not finished counts as running (Sync now waits for it). */
-export const SYNC_BUSY_MS = 2 * 60_000;
 /** One preview per kind per 10 minutes: protects the email quota and the AI editor's monthly cap. */
 export const PREVIEW_COOLDOWN_MS = 10 * 60_000;
 export const previewKey = (kind: DigestKind) => `preview:${kind}`;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
-const back = (code: string, ok = true) => redirect303(`/?${ok ? "ok" : "error"}=${code}`);
+/** The actions live on /manage, which shows the flash message. */
+const back = (code: string, ok = true) => redirect303(`/manage?${ok ? "ok" : "error"}=${code}`);
 
 /** POST /actions/sync: runs the sync job inline (with its alerting), unless one is already running. */
 export async function syncNow(env: Env, now = Date.now()): Promise<Response> {
