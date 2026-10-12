@@ -5,7 +5,8 @@
 # render this template with the example values.
 
 # Worker name (lowercase letters, digits, dashes), e.g. spotify-sync. One per instance.
-name = "{{WORKER_NAME}}"
+# A real default name (Workers Builds compares it with the connected Worker); WORKER_NAME overrides it.
+name = "spotify-sync"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]

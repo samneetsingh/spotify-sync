@@ -70,7 +70,7 @@ npm run configure                                  # writes wrangler.generated.t
 
 | Key | Required | Value |
 |---|---|---|
-| `WORKER_NAME` | yes | Worker name, e.g. `spotify-sync`. The import bucket and Workflow are named after it. |
+| `WORKER_NAME` | no (default `spotify-sync`) | Worker name; set it for a second instance on the same account. The import bucket and Workflow are named after it. |
 | `D1_DATABASE_NAME`, `D1_DATABASE_ID` | yes | The production database from step 3 |
 | `TEST_WORKER_NAME`, `TEST_D1_DATABASE_NAME`, `TEST_D1_DATABASE_ID` | yes | Name for the local test Worker (`npm run dev`) and the test database |
 | `CUSTOM_DOMAIN` | yes | Hostname the Worker is served on, e.g. `spotify-sync.example.com`, in a zone on your Cloudflare account |

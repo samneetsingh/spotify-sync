@@ -19,8 +19,21 @@ const TOKEN = /\{\{([A-Z0-9_]+)\}\}/g;
 // Characters that would break out of (or corrupt) a TOML basic string.
 const UNSAFE = /["\\\u0000-\u001f\u007f]/;
 
-/** Optional placeholder keys and their defaults (none at the moment: every placeholder is required). */
-export const DEFAULTS = {};
+/** Optional placeholder keys and their defaults. */
+export const DEFAULTS = { WORKER_NAME: "spotify-sync" };
+
+// The template's top-level `name` is a real name ("spotify-sync"), so Workers Builds, which compares it
+// with the connected Worker, doesn't flag the repo. render() swaps it for WORKER_NAME (default
+// "spotify-sync"); only a second instance on the same account needs its own WORKER_NAME.
+const TOP_LEVEL_NAME = /^name = "[^"]*"$/m;
+
+/** Points the template's top-level `name` (before the first [section]) at WORKER_NAME. */
+function topLevelName(template) {
+  const firstSection = template.search(/^\[/m);
+  const head = firstSection < 0 ? template : template.slice(0, firstSection);
+  if (!TOP_LEVEL_NAME.test(head)) throw new Error('wrangler.toml: no top-level `name = "..."` line before the first [section]');
+  return head.replace(TOP_LEVEL_NAME, 'name = "{{WORKER_NAME}}"') + template.slice(head.length);
+}
 
 /**
  * Pre-dashboard keys, now dashboard settings and ids the Worker keeps in D1. Each one a deploy config
@@ -86,7 +99,7 @@ export function render(template, config, source = "the deploy config") {
   const enabled = { imports: options.imports !== false };
   const legacy = LEGACY_KEYS.filter((k) => k in config);
   const legacyLines = (keys) => keys.filter((k) => typeof config[k] === "string" && !UNSAFE.test(config[k])).map((k) => `${k} = "${config[k]}"\n`).join("");
-  const body = template
+  const body = topLevelName(template)
     .replace(SECTION, (_, name, inner) => {
       if (!(name in enabled)) throw new Error(`wrangler.toml: unknown section {{#${name}}}`);
       return enabled[name] ? inner : "";
