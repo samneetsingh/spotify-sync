@@ -1,13 +1,12 @@
-// Page shell and markup helpers for every dashboard page (also used by auth and import pages).
+// Page shell for every dashboard page (also used by the auth and import pages), and time helpers.
 //
-// Escaping rule: arguments named `...Html` and `body` are trusted HTML; everything else is text and
-// gets escaped (JSX escapes by default). Classes only, never `style=` attributes: the CSP allows the
+// Escaping rule: `body` is trusted HTML (render() of a TSX view); everything else is text and gets
+// escaped (JSX escapes by default). Classes only, never `style=` attributes: the CSP allows the
 // one nonce'd <style>.
 
 import type { Child } from "hono/jsx";
 import { localTime as alertTime } from "../alerts";
 import type { Session } from "../auth";
-import { esc } from "../email/layout";
 import { cspNonce, html } from "../http";
 import { COLOR, DISPLAY_FONT_URL } from "./tokens";
 import { Notice as NoticeView, PostButton } from "./components/primitives";
@@ -29,7 +28,7 @@ export interface PageOptions {
   session: Session | null;
   /** The current nav item (aria-current="page"). */
   nav?: NavKey;
-  /** Trusted HTML. Escape every Spotify- or user-supplied value (esc, or the ui helpers). */
+  /** Trusted HTML, usually render(<View />): JSX escapes every Spotify- or user-supplied value. */
   body: string;
   /** A flash message above the heading: ok is role=status, error is role=alert. */
   notice?: Notice;
@@ -61,60 +60,6 @@ const NAV: Array<{ key: NavKey; href: string; label: string }> = [
 export type Tone = "ok" | "warn" | "bad" | "neutral";
 export type ButtonVariant = "primary" | "secondary" | "danger";
 
-/** Building blocks for dashboard markup. Text arguments are escaped; `...Html` arguments are trusted. */
-export const ui = {
-  esc,
-  /**
-   * A card: <section class="card"> with an <h2> title, the body, and an optional row of actions.
-   * `headHtml` goes next to the title (e.g. a status pill).
-   */
-  card(title: string, bodyHtml: string, opts: { id?: string; actionsHtml?: string; headHtml?: string } = {}): string {
-    const id = opts.id ? ` id="${esc(opts.id)}"` : "";
-    const labelled = opts.id ? ` aria-labelledby="${esc(opts.id)}-title"` : "";
-    const h2 = `<h2${opts.id ? ` id="${esc(opts.id)}-title"` : ""}>${esc(title)}</h2>`;
-    const head = opts.headHtml ? `<div class="card-head">${h2}${opts.headHtml}</div>` : `<div class="card-head">${h2}</div>`;
-    const actions = opts.actionsHtml ? `<div class="actions">${opts.actionsHtml}</div>` : "";
-    return `<section class="card"${id}${labelled}>${head}${bodyHtml}${actions}</section>`;
-  },
-  /** Label/value rows (<dl class="facts">). */
-  facts(rows: Array<[label: string, value: string]>): string {
-    return ui.factsHtml(rows.map(([k, v]) => [k, esc(v)]));
-  },
-  /** Label/value rows whose values are trusted HTML (links, pills, a muted second line). */
-  factsHtml(rows: Array<[label: string, valueHtml: string]>): string {
-    return `<dl class="facts">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl>`;
-  },
-  /** A status pill. Its text carries the meaning; colour is never the only signal. */
-  pill(tone: Tone, text: string): string {
-    return `<span class="pill pill-${tone}">${esc(text)}</span>`;
-  },
-  /** A one-button POST form (state changes never happen on GET; the router checks Origin). */
-  postButton(
-    action: string,
-    label: string,
-    opts: { fields?: Record<string, string>; variant?: ButtonVariant; small?: boolean; ariaLabel?: string } = {},
-  ): string {
-    const fields = Object.entries(opts.fields ?? {})
-      .map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`)
-      .join("");
-    const cls = `btn btn-${opts.variant ?? "secondary"}${opts.small ? " btn-small" : ""}`;
-    const aria = opts.ariaLabel ? ` aria-label="${esc(opts.ariaLabel)}"` : "";
-    return `<form class="inline" method="post" action="${esc(action)}">${fields}<button type="submit" class="${cls}"${aria}>${esc(label)}</button></form>`;
-  },
-  /** A link that looks like a button. */
-  linkButton(href: string, label: string, variant: ButtonVariant = "secondary"): string {
-    return `<a class="btn btn-${variant}" href="${esc(href)}">${esc(label)}</a>`;
-  },
-  /** A link to Spotify (or any absolute URL we built); opens in the same tab. */
-  link(href: string, label: string): string {
-    return `<a href="${esc(href)}">${esc(label)}</a>`;
-  },
-  /** A flash message: role=status (ok, warn) or role=alert (error). */
-  notice(n: Notice): string {
-    return `<div class="notice notice-${n.kind}" role="${n.kind === "error" ? "alert" : "status"}">${esc(n.text)}</div>`;
-  },
-};
-
 // ---------------------------------------------------------------------------- times
 
 /** "just now", "12 min ago", "3 h ago", "2 days ago" (future times: "in 5 min"). */
@@ -131,10 +76,6 @@ export function ago(ms: number, now: number): string {
 
 /** "Sat, Oct 11, 3:20 PM PDT" in `timeZone` (UTC if that zone is invalid). */
 export const localTime = alertTime;
-
-/** A relative time with the local time under it (trusted HTML, for ui.factsHtml and rows). */
-export const whenHtml = (ms: number, now: number, timeZone: string): string =>
-  `${esc(ago(ms, now))}<span class="sub">${esc(localTime(ms, timeZone))}</span>`;
 
 // ---------------------------------------------------------------------------- page
 

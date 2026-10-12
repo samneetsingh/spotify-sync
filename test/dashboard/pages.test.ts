@@ -3,7 +3,7 @@
 
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { handleDashboard, renderPage, ui } from "../../src/dashboard";
+import { handleDashboard, renderPage } from "../../src/dashboard";
 import { migrate } from "../../src/db/schema";
 import { resetDb } from "../parity/spotify-fixture";
 import { ctx, expectSafePage, fakeBinding, get, ORIGIN, post, session, settingsReady, testEnv } from "./helpers";
@@ -119,24 +119,25 @@ describe("renderPage", () => {
     const nonce = (r: Response) => r.headers.get("Content-Security-Policy")!.match(/nonce-([^']+)/)![1];
     expect(nonce(renderPage({ title: "a", session: null, body: "" }))).not.toBe(nonce(renderPage({ title: "a", session: null, body: "" })));
   });
-
-  it("ui helpers escape text but not *Html arguments", () => {
-    expect(ui.card(XSS, "<b>trusted</b>", { headHtml: ui.pill("ok", XSS) })).toContain("<b>trusted</b>");
-    expect(ui.card(XSS, "")).not.toContain("<script>");
-    expect(ui.facts([[XSS, XSS]])).not.toContain("<script>");
-    expect(ui.postButton("/actions/preview", XSS, { fields: { kind: `"><script>` } })).not.toContain("<script>");
-    expect(ui.notice({ kind: "error", text: XSS })).toContain('role="alert"');
-  });
 });
 
-describe("home page (until the new Home is wired)", () => {
-  it("links to Manage and shows the flash message", async () => {
-    const res = (await handleDashboard(get("/?ok=saved"), testEnv(), ctx, session))!;
-    expect(res.status).toBe(200);
-    const body = await expectSafePage(res);
-    expect(body).toContain('aria-current="page">Home');
-    expect(body).toContain(`<a class="btn btn-primary" href="/manage">`);
-    expect(body).toContain(`role="status">Settings saved.`);
+describe("home page", () => {
+  it("renders the new Home with the flash, the status chip and the settings widget; no Spotify call without art to fetch", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error("unexpected fetch"))) as typeof fetch;
+    try {
+      const res = (await handleDashboard(get("/?ok=saved"), testEnv(), ctx, session))!;
+      expect(res.status).toBe(200);
+      const body = await expectSafePage(res);
+      expect(body).toContain('aria-current="page">Home');
+      expect(body).toContain("<h1>Home</h1>");
+      expect(body).toContain(`role="status">Settings saved.`);
+      expect(body).toContain('id="settings"');
+      expect(body).toContain('action="/settings/toggle"');
+      expect(body).toContain('href="/manage"');
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
 

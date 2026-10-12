@@ -2,7 +2,7 @@
 // /settings/toggle, GET /activity and the POST /actions/*. Auth, import and 404s are handled
 // elsewhere (src/index.ts routes in order: Origin check, auth, session, import, dashboard).
 //
-// renderPage and `ui` (src/dashboard/layout.tsx) are shared with the auth and import pages. Escaping
+// renderPage (src/dashboard/layout.tsx) is shared with the auth and import pages. Escaping
 // rule: arguments named `...Html`/`body` are trusted HTML, everything else is text and gets escaped.
 // Classes only: the CSP blocks `style=` attributes.
 
@@ -14,14 +14,18 @@ import { importCard } from "../import";
 import { emailConfig } from "../runtime";
 import { isSettingKey, loadSettings, saveSettings, settingDef, type SettingKey } from "../settings";
 import { activityBody, loadActivity } from "./activity";
+import { fillArt } from "./art";
+import { loadHome } from "./home-data";
+import { HomeView } from "./home-view";
 import { PREVIEW_COOLDOWN_MS, recreatePlaylist, sendPreview, syncNow } from "./actions";
 import { renderLanding } from "./landing";
-import { renderPage, ui, type Notice } from "./layout";
+import { renderPage, type Notice } from "./layout";
 import { manageBody } from "./manage";
+import { render } from "./render";
 import { settingsBody } from "./settings";
 import { loadStatus } from "./status";
 
-export { ago, localTime, renderPage, ui, whenHtml, type ButtonVariant, type NavKey, type Notice, type PageOptions, type Tone } from "./layout";
+export { ago, localTime, renderPage, type ButtonVariant, type NavKey, type Notice, type PageOptions, type Tone } from "./layout";
 
 /** Whether the import bindings exist (the Import nav item and card are hidden without them). */
 export const importEnabled = (env: Env): boolean => !!(env.IMPORTS && env.IMPORT_WORKFLOW);
@@ -66,13 +70,15 @@ export function flashNotice(url: URL, env: Env): Notice | undefined {
 
 // ---------------------------------------------------------------------------- pages
 
-// TEMPORARY: replaced at integration (loadHome -> fillArt -> HomeView).
+/**
+ * The owner's Home: one D1 batch (loadHome), then art for anything the cache lacks (at most two
+ * Spotify calls, capped at 2.5 s; a warm view makes none).
+ */
 async function homePage(env: Env, ctx: ExecutionContext, session: Session, notice: Notice | undefined): Promise<Response> {
-  const body = ui.card("Your listening", `<p class="lead">The new Home is on its way. Sync, previews, playlists and recent activity are on Manage.</p>`, {
-    id: "home",
-    actionsHtml: ui.linkButton("/manage", "Go to Manage", "primary"),
-  });
-  return renderPage({ title: "Home", session, nav: "home", body, notice, importEnabled: importEnabled(env) });
+  const settings = await loadSettings(env.DB, env);
+  const data = await fillArt(env, ctx, await loadHome(env.DB, { now: Date.now(), timeZone: settings.values.timeZone }));
+  const body = render(HomeView({ data, settings: settings.values, aiAvailable: !!env.OPENAI_API_KEY, writeMode: parseWriteMode(env.WRITE_MODE) }));
+  return renderPage({ title: "Home", session, nav: "home", layout: "wide", hideTitle: true, body, notice, importEnabled: importEnabled(env) });
 }
 
 async function managePage(env: Env, session: Session, url: URL): Promise<Response> {
