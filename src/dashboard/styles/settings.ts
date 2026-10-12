@@ -12,6 +12,9 @@ export const SETTINGS_CSS = `
 .part-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .part-head h3{margin:0}
 .settings-list>.setting:first-child{border-top:0}
+/* A status line's button (a digest's "Send me a preview") goes on its own line under the text, unwrapped. */
+.status-action{flex:1 0 100%}
+.setting-status .btn{white-space:nowrap}
 @media (min-width:900px){
 .dash-top,.dash-more{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 }

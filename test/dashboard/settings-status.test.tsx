@@ -117,7 +117,8 @@ describe("settings page status", () => {
 
   it("offers a preview of each digest that's on, and shows when the next one goes out", async () => {
     const html = await page();
-    expect(html).toContain(`<button type="submit" form="preview-week" class="btn btn-secondary btn-small" aria-label="Send me a preview of the weekly digest">Send me a preview</button>`);
+    // The button goes under the "Next:" line (its own row), not beside it.
+    expect(html).toContain(`<span>Next: Mon, Oct 12, covering Oct 5–11.</span><div class="status-action"><button type="submit" form="preview-week" class="btn btn-secondary btn-small" aria-label="Send me a preview of the weekly digest">Send me a preview</button></div>`);
     expect(html).toContain(`aria-label="Send me a preview of the monthly recap"`);
     expect(html).toContain(`<form id="preview-week" method="post" action="/actions/preview" hidden=""><input type="hidden" name="kind" value="week"/></form>`);
     expect(html).toContain("Next: Mon, Oct 12, covering Oct 5–11.");

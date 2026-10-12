@@ -181,7 +181,11 @@ function digestLine(v: StatusView, kind: "week" | "month"): Child {
   return (
     <>
       <span>{next ? `Next: ${runDay(next.at, tz)}, covering ${periodLabel(next.period)}.` : "Next: not scheduled."}</span>
-      {canPreview(v) ? <FormButton form={`preview-${kind}`} label="Send me a preview" ariaLabel={`Send me a preview of the ${name}`} /> : null}
+      {canPreview(v) ? (
+        <div class="status-action">
+          <FormButton form={`preview-${kind}`} label="Send me a preview" ariaLabel={`Send me a preview of the ${name}`} />
+        </div>
+      ) : null}
     </>
   );
 }
