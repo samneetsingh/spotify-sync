@@ -18,7 +18,8 @@ const SPOTIFY_IMAGE_SOURCES = "https://*.scdn.co https://*.spotifycdn.com";
 export function isSpotifyImageUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === "https:" && (u.hostname.endsWith(".scdn.co") || u.hostname.endsWith(".spotifycdn.com"));
+    const host = u.hostname.endsWith(".scdn.co") || u.hostname.endsWith(".spotifycdn.com");
+    return u.protocol === "https:" && host && u.port === "" && !u.username && !u.password;
   } catch {
     return false;
   }

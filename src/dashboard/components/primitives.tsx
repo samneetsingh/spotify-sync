@@ -1,7 +1,6 @@
-// TSX building blocks for dashboard views. Card, Facts, Pill, PostButton, LinkButton, Notice and
-// Rows/Row render the same markup as the `ui` helpers and home.ts's rows (same classes, so the same
-// CSS styles both); Switch and Chip are new. JSX escapes text props; props typed `Child` take
-// elements, or raw() for HTML that is already escaped.
+// TSX building blocks for dashboard views: Card, Facts, Pill, PostButton, LinkButton, Notice,
+// Rows/Row, Switch and Chip, styled by the shared classes in styles/base.ts. JSX escapes text props;
+// props typed `Child` take elements, or raw() for HTML that is already escaped.
 
 import type { Child } from "hono/jsx";
 import type { ButtonVariant, Notice as NoticeProps, Tone } from "../layout";

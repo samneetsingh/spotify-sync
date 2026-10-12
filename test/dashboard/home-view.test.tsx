@@ -83,7 +83,7 @@ describe("HomeView", () => {
     expect(out).toContain("Your first sync runs within 10 minutes.");
     expect(out).toContain(`<span class="vinyl-cover vinyl-blank"></span>`);
     expect(out).not.toContain(`<figure class="chart`);
-    expect(out).toContain("No digest yet. The first one goes out Mon, Oct 12.");
+    expect(out).toContain("The latest digest shows up here after the next send, Mon, Oct 12.");
     expect(out).toContain(`id="settings"`);
   });
 
@@ -157,5 +157,15 @@ describe("HomeView", () => {
     expect(out).toContain(`<dt>Monthly recap</dt><dd><span class="muted">Off</span></dd>`);
     expect(out).toContain("Dry run: digests are written to the Worker log");
     expect(out).toContain(`<span class="pill pill-neutral">Dry run</span>`);
+  });
+});
+
+describe("HomeView art lookups", () => {
+  it("renders a track whose id names an Object member (e.g. from an imported export) with the placeholder", () => {
+    const data = fullHome();
+    const odd = { ...data.topTracks[0]!, id: "constructor" };
+    const out = view({ ...data, art: {}, songOfWeek: { track: odd, lastWeek: false }, topTracks: [odd], throwbacks: [{ year: 2021, track: { ...odd, id: "toString" } }] });
+    expect(out).not.toContain("function");
+    expect(out).not.toMatch(/src="(?!\/)(?!https:)/);
   });
 });

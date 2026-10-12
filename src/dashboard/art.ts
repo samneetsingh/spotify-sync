@@ -6,6 +6,7 @@
 // page's art is fetched again and `at` restarts; a partial fill keeps `at`. Any failure means
 // placeholders and no write. A warm page view makes no Spotify calls.
 
+import { isLoginError } from "../alerts";
 import { parseWriteMode, type Env } from "../env";
 import { getState, setState } from "../db/state";
 import { isSpotifyImageUrl } from "../http";
@@ -47,13 +48,16 @@ export function artIds(data: HomeData): { tracks: string[]; artists: string[] } 
 
 /**
  * `data` with art for every id it shows that the cache lacks. No Spotify call when nothing is
- * missing, Spotify isn't connected or the app has no credentials. Never throws.
+ * missing, Spotify isn't connected (or its login needs reconnecting) or the app has no credentials.
+ * Never throws.
  */
 export async function fillArt(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, data: HomeData): Promise<HomeData> {
   const ids = artIds(data);
-  const tracks = ids.tracks.filter((id) => !(id in data.art));
-  const artists = ids.artists.filter((id) => !(id in data.art));
-  if ((!tracks.length && !artists.length) || !data.status.connected || !env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) return data;
+  const tracks = ids.tracks.filter((id) => !Object.hasOwn(data.art, id));
+  const artists = ids.artists.filter((id) => !Object.hasOwn(data.art, id));
+  // Spotify's login expired or was revoked: every call would fail after a token refresh, so don't try.
+  const loginFailing = data.status.failing.some((f) => f.job === "sync" && !!f.lastError && isLoginError(f.lastError));
+  if ((!tracks.length && !artists.length) || !data.status.connected || loginFailing || !env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET) return data;
   try {
     const fetched = await fetchArt(env, ctx, tracks, artists);
     ctx.waitUntil(saveArt(env.DB, fetched, [...ids.tracks, ...ids.artists], data.now));

@@ -45,9 +45,9 @@ const FLASH_ERROR: Record<string, string> = {
 
 function flash(url: URL | undefined): Notice | undefined {
   const ok = url?.searchParams.get("ok");
-  if (ok && FLASH_OK[ok]) return { kind: "ok", text: FLASH_OK[ok] };
+  if (ok && Object.hasOwn(FLASH_OK, ok)) return { kind: "ok", text: FLASH_OK[ok] };
   const err = url?.searchParams.get("err");
-  if (err && FLASH_ERROR[err]) return { kind: "error", text: FLASH_ERROR[err] };
+  if (err && Object.hasOwn(FLASH_ERROR, err)) return { kind: "error", text: FLASH_ERROR[err] };
   return undefined;
 }
 

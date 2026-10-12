@@ -128,5 +128,7 @@ describe("isSpotifyImageUrl", () => {
     expect(isSpotifyImageUrl("https://example.com/x.png")).toBe(false);
     expect(isSpotifyImageUrl("javascript:alert(1)")).toBe(false);
     expect(isSpotifyImageUrl("not a url")).toBe(false);
+    expect(isSpotifyImageUrl("https://i.scdn.co:8443/image/x")).toBe(false);
+    expect(isSpotifyImageUrl("https://user:pw@i.scdn.co/image/x")).toBe(false);
   });
 });

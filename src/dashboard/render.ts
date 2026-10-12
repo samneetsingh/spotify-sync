@@ -1,7 +1,7 @@
 // Server-side rendering of the dashboard's TSX views (hono/jsx) to HTML strings.
 //
 // JSX escapes every text child and attribute value. `raw()` marks a trusted string that goes in as
-// is: the CSS, or HTML the `ui` helpers already escaped. Never pass Spotify or user text to raw().
+// is: the CSS, or HTML another view already rendered. Never pass Spotify or user text to raw().
 
 import { raw } from "hono/html";
 import type { JSX } from "hono/jsx/jsx-runtime";

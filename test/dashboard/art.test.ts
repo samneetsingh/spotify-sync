@@ -143,6 +143,25 @@ describe("fillArt", () => {
     expect(spotify.calls).toEqual([]);
   });
 
+  it("makes no call while Spotify's login needs reconnecting", async () => {
+    spotify = mockSpotify();
+    const data = await home({});
+    const failing = { job: "sync", since: NOW - DAY, failures: 3, lastError: "Spotify token refresh failed: 400 invalid_grant" };
+    const relogin = { ...data, status: { ...data.status, failing: [failing] } };
+    expect(await fillArt(testEnv(), context().ctx, relogin)).toBe(relogin);
+    expect(spotify.calls).toEqual([]);
+  });
+
+  it("treats only the cache's own keys as cached (an id like \"constructor\" still gets fetched)", async () => {
+    spotify = mockSpotify();
+    const data = { ...(await home({})), topTracks: [track("constructor")], throwbacks: [], songOfWeek: null };
+    const { ctx, settle } = context();
+    const filled = await fillArt(testEnv(), ctx, data);
+    await settle();
+    expect(spotify.calls.find((c) => c.path === "/v1/tracks")?.ids).toEqual(["constructor"]);
+    expect(Object.hasOwn(filled.art, "constructor")).toBe(true);
+  });
+
   it("keeps the newest 300 entries, the page's ids counting as newest", async () => {
     const old = Object.fromEntries(Array.from({ length: ART_MAX_ENTRIES - 1 }, (_, i) => [`old${i}`, cover(`old${i}`)]));
     const at = NOW - DAY;

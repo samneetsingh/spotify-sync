@@ -19,6 +19,9 @@ import type { DayBar, HomeData, MonthBar, PeriodSoFar } from "./home-data";
 import { ago } from "./layout";
 import { runDay } from "./next-digest";
 
+/** The cached image for a Spotify id; own keys only, so an id like "constructor" can't pick up Object's members. */
+const artOf = (data: HomeData, id: string): string | undefined => (Object.hasOwn(data.art, id) && data.art[id]) || undefined;
+
 export interface HomeViewProps {
   data: HomeData;
   settings: SettingValues;
@@ -73,7 +76,7 @@ function Hero({ data, empty }: { data: HomeData; empty: boolean }) {
   const t = song.track;
   return (
     <section class="card hero" aria-labelledby="hero-title">
-      <Vinyl cover={data.art[t.id] || undefined} />
+      <Vinyl cover={artOf(data, t.id)} />
       <div class="hero-text">
         <div class="hero-head">
           {title}
@@ -228,7 +231,7 @@ function TopTracks({ data, month }: { data: HomeData; month: string }) {
       {tracks.length ? (
         <ol class="tracks">
           {tracks.map((t, i) => (
-            <TrackRow rank={i + 1} track={t} art={data.art[t.id]} max={tracks[0]!.plays} />
+            <TrackRow rank={i + 1} track={t} art={artOf(data, t.id)} max={tracks[0]!.plays} />
           ))}
         </ol>
       ) : (
@@ -249,7 +252,7 @@ function TopArtists({ data, month }: { data: HomeData; month: string }) {
       {artists.length ? (
         <BarList
           label={`Top artists, ${month} so far`}
-          items={artists.map((a) => ({ label: a.name, value: a.plays, href: artistUrl(a.id), media: <ArtistAvatar name={a.name} url={data.art[a.id] || undefined} /> }))}
+          items={artists.map((a) => ({ label: a.name, value: a.plays, href: artistUrl(a.id), media: <ArtistAvatar name={a.name} url={artOf(data, a.id)} /> }))}
         />
       ) : data.topTracks.length ? (
         <EmptyState title="No artist details yet">Artists show up once their details are fetched from Spotify, usually by tonight.</EmptyState>
@@ -340,7 +343,7 @@ function NewToYou({ data, month }: { data: HomeData; month: string }) {
               <ul class="people">
                 {n.newArtists.map((a) => (
                   <li>
-                    <ArtistAvatar name={a.name} url={data.art[a.id] || undefined} size={56} />
+                    <ArtistAvatar name={a.name} url={artOf(data, a.id)} size={56} />
                     <a href={artistUrl(a.id)}>{a.name}</a>
                     <span class="muted num">{playsText(a.plays)}</span>
                   </li>
@@ -369,7 +372,7 @@ function Throwback({ data, month }: { data: HomeData; month: string }) {
         <ul class="throwbacks">
           {data.throwbacks.map((tb) => (
             <li>
-              <Cover url={data.art[tb.track.id] || undefined} size={56} />
+              <Cover url={artOf(data, tb.track.id)} size={56} />
               <div class="tb-text">
                 <span class="tb-when">
                   {month} {tb.year}
@@ -425,7 +428,7 @@ function Digests({ data, settings, writeMode }: { data: HomeData; settings: Sett
           </p>
         </div>
       ) : (
-        <p class="soft">{firstNext ? `No digest yet. The first one goes out ${runDay(firstNext.at, tz)}.` : "No digest yet."}</p>
+        <p class="soft">{firstNext ? `The latest digest shows up here after the next send, ${runDay(firstNext.at, tz)}.` : "The latest digest shows up here once one is sent."}</p>
       )}
       <h3 class="sub-title">Next</h3>
       <dl class="facts">
