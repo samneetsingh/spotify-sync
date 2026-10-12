@@ -6,6 +6,7 @@ import {
   cookieName,
   cspNonce,
   html,
+  isSpotifyImageUrl,
   notFoundPage,
   parseCookies,
   readCookie,
@@ -23,7 +24,7 @@ describe("html responses", () => {
     expect(res.status).toBe(201);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
     expect(res.headers.get("Content-Security-Policy")).toBe(
-      "default-src 'none'; style-src 'nonce-abc123'; script-src 'self'; img-src 'self' https://i.scdn.co data:; font-src 'self'; connect-src 'self'; form-action 'self' https://accounts.spotify.com; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'nonce-abc123'; script-src 'self'; img-src 'self' https://*.scdn.co https://*.spotifycdn.com data:; font-src 'self'; connect-src 'self'; form-action 'self' https://accounts.spotify.com; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
@@ -111,5 +112,21 @@ describe("cookies", () => {
     expect(readCookie(req, "session", PROD)).toBe("secure");
     expect(readCookie(req, "session", DEV)).toBe("plain");
     expect(readCookie(req, "oauth", PROD)).toBeNull();
+  });
+});
+
+describe("isSpotifyImageUrl", () => {
+  it("accepts https URLs on Spotify's image CDNs (the CSP's img-src)", () => {
+    expect(isSpotifyImageUrl("https://i.scdn.co/image/ab67616d0000b273")).toBe(true);
+    expect(isSpotifyImageUrl("https://image-cdn-ak.spotifycdn.com/image/ab6761610000e5eb")).toBe(true);
+  });
+
+  it("refuses other hosts, look-alikes, http and junk", () => {
+    expect(isSpotifyImageUrl("http://i.scdn.co/image/x")).toBe(false);
+    expect(isSpotifyImageUrl("https://scdn.co.evil.example/image/x")).toBe(false);
+    expect(isSpotifyImageUrl("https://evilspotifycdn.com/image/x")).toBe(false);
+    expect(isSpotifyImageUrl("https://example.com/x.png")).toBe(false);
+    expect(isSpotifyImageUrl("javascript:alert(1)")).toBe(false);
+    expect(isSpotifyImageUrl("not a url")).toBe(false);
   });
 });

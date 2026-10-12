@@ -8,6 +8,7 @@
 
 import { parseWriteMode, type Env } from "../env";
 import { getState, setState } from "../db/state";
+import { isSpotifyImageUrl } from "../http";
 import { pickImage } from "../jobs/digest";
 import { SpotifyClient } from "../spotify/client";
 import type { HomeData } from "./home-data";
@@ -30,8 +31,8 @@ function parseCache(raw: string | null, now: number): { at: number; art: ArtMap 
   }
   const { at, art } = (v && typeof v === "object" ? v : {}) as { at?: unknown; art?: unknown };
   if (typeof at !== "number" || now - at > ART_MAX_AGE_MS || !art || typeof art !== "object") return null;
-  // Only image URLs (or "") ever get here; anything else in the value is dropped.
-  return { at, art: Object.fromEntries(Object.entries(art).filter(([, url]) => url === "" || (typeof url === "string" && url.startsWith("https://")))) };
+  // Only Spotify image URLs the CSP allows (or "") ever get here; anything else in the value is dropped.
+  return { at, art: Object.fromEntries(Object.entries(art).filter(([, url]) => url === "" || (typeof url === "string" && isSpotifyImageUrl(url)))) };
 }
 
 /** The cached entries of a `dashboard:art` value: none when it is missing, malformed or stale. */
@@ -75,8 +76,10 @@ async function fetchArt(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, trac
   const [t, a] = await Promise.race([work, timedOut]);
 
   const art: ArtMap = Object.fromEntries([...tracks, ...artists].map((id) => [id, ""]));
-  for (const track of t?.tracks ?? []) if (track?.id && track.id in art) art[track.id] = pickImage(track.album?.images) ?? "";
-  for (const artist of a?.artists ?? []) if (artist?.id && artist.id in art) art[artist.id] = pickImage(artist.images) ?? "";
+  // A URL the CSP wouldn't allow is stored as "" (placeholder), like a missing image.
+  const allowed = (url: string | undefined) => (url && isSpotifyImageUrl(url) ? url : "");
+  for (const track of t?.tracks ?? []) if (track?.id && track.id in art) art[track.id] = allowed(pickImage(track.album?.images));
+  for (const artist of a?.artists ?? []) if (artist?.id && artist.id in art) art[artist.id] = allowed(pickImage(artist.images));
   return art;
 }
 

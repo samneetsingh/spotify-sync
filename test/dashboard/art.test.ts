@@ -20,7 +20,7 @@ const cover = (id: string, w = 300) => `https://i.scdn.co/image/${id}-${w}`;
 type Call = { path: string; ids: string[]; signal: AbortSignal | null };
 
 /** Spotify's token, tracks and artists endpoints. `gone` ids come back null; `fail`/`hang` break that endpoint. */
-function mockSpotify(opts: { fail?: "tracks" | "artists"; hang?: boolean } = {}) {
+function mockSpotify(opts: { fail?: "tracks" | "artists"; hang?: boolean; foreign?: boolean } = {}) {
   const calls: Call[] = [];
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -34,7 +34,7 @@ function mockSpotify(opts: { fail?: "tracks" | "artists"; hang?: boolean } = {})
     if (opts.hang) {
       return new Promise<Response>((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
     }
-    const images = (id: string) => [640, 300, 64].map((w) => ({ url: cover(id, w), width: w, height: w }));
+    const images = (id: string) => [640, 300, 64].map((w) => ({ url: opts.foreign ? `https://images.example.com/${id}-${w}` : cover(id, w), width: w, height: w }));
     if (url.pathname === "/v1/tracks") {
       if (opts.fail === "tracks") return json({ error: { status: 400, message: "bad" } }, 400);
       return json({ tracks: ids.map((id) => (id.startsWith("gone") ? null : { id, album: { images: images(id) } })) });
@@ -191,5 +191,21 @@ describe("fillArt", () => {
     expect(spotify.calls.every((c) => c.signal?.aborted)).toBe(true);
     await settle();
     expect(await getState(env.DB, ART_KEY)).toBeNull();
+  });
+});
+
+describe("fillArt: image hosts", () => {
+  it("stores an image the CSP wouldn't allow as a placeholder, and drops one from the cache", async () => {
+    spotify = mockSpotify({ foreign: true });
+    const { ctx, settle } = context();
+    const filled = await fillArt(testEnv(), ctx, await home({}));
+    await settle();
+    expect(filled.art.t1).toBe("");
+    expect(filled.art.a1).toBe("");
+    expect(Object.values((await storedCache())!.art).every((url) => url === "")).toBe(true);
+
+    await setState(env.DB, ART_KEY, JSON.stringify({ at: NOW, art: { t1: "https://images.example.com/x", t2: cover("t2") } }));
+    const cached = await loadHome(env.DB, { now: NOW, timeZone: LA });
+    expect(cached.art).toEqual({ t2: cover("t2") });
   });
 });

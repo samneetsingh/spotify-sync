@@ -9,6 +9,22 @@ export function cspNonce(): string {
 }
 
 /**
+ * Spotify's image CDNs: album covers come from i.scdn.co, some artist photos from *.spotifycdn.com.
+ * The CSP's img-src and the dashboard's art cache (isSpotifyImageUrl) use this one list.
+ */
+const SPOTIFY_IMAGE_SOURCES = "https://*.scdn.co https://*.spotifycdn.com";
+
+/** An https URL on one of Spotify's image CDNs (what the CSP lets the dashboard show). */
+export function isSpotifyImageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && (u.hostname.endsWith(".scdn.co") || u.hostname.endsWith(".spotifycdn.com"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Inline styles only through `<style nonce>` (no `style=` attributes), scripts only from our origin
  * (public/import.js), images from us and Spotify's CDN, fonts from us (self-hosted), forms to us and
  * Spotify's login.
@@ -18,7 +34,7 @@ export function contentSecurityPolicy(nonce: string): string {
     "default-src 'none'",
     `style-src 'nonce-${nonce}'`,
     "script-src 'self'",
-    "img-src 'self' https://i.scdn.co data:",
+    `img-src 'self' ${SPOTIFY_IMAGE_SOURCES} data:`,
     "font-src 'self'",
     "connect-src 'self'",
     "form-action 'self' https://accounts.spotify.com",
