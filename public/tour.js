@@ -105,6 +105,10 @@ function start(first, name) {
   let frame = 0;
   let busy = false;
   let savedHere = false;
+  // Phones: room under the page for the bottom sheet, so a part at the very bottom (the history
+  // import) can scroll up above it. Restored when the tour ends.
+  const padBefore = document.body.style.paddingBottom;
+  const sheet = () => innerWidth < SHEET_BELOW;
   const note = $(".tour-note");
 
   const position = () => {
@@ -125,6 +129,7 @@ function start(first, name) {
     removeEventListener("scroll", queue, true);
     removeEventListener("resize", queue);
     document.removeEventListener("keydown", keys);
+    document.body.style.paddingBottom = padBefore;
     root.classList.add("is-leaving");
     setTimeout(() => root.remove(), reduce ? 0 : 250);
     const url = new URL(location.href);
@@ -160,10 +165,18 @@ function start(first, name) {
       card.classList.remove("is-in");
       note.hidden = true;
       if (el) {
-        const r = el.getBoundingClientRect();
-        const tall = r.height > innerHeight * 0.6 || innerWidth < SHEET_BELOW;
-        el.scrollIntoView({ block: tall ? "start" : "center", behavior: reduce ? "auto" : "smooth" });
-      }
+        const behavior = reduce ? "auto" : "smooth";
+        if (sheet()) {
+          // Into the space above the sheet: centred there when it fits, else its top at the top.
+          document.body.style.paddingBottom = `${card.offsetHeight + 3 * EDGE}px`;
+          const r = el.getBoundingClientRect();
+          const room = innerHeight - card.offsetHeight - 3 * EDGE;
+          scrollTo({ top: scrollY + (r.height >= room ? r.top - EDGE : r.top - (room - r.height) / 2), behavior });
+        } else {
+          const r = el.getBoundingClientRect();
+          el.scrollIntoView({ block: r.height > innerHeight * 0.6 ? "start" : "center", behavior });
+        }
+      } else document.body.style.paddingBottom = padBefore;
       position();
       setTimeout(() => {
         position();
