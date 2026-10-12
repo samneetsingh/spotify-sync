@@ -18,15 +18,28 @@ export const SETTINGS_CSS = `
 .status-action{flex:1 0 100%}
 .setting-status .btn{white-space:nowrap}
 /* The artist playlists modal (a popover in the top layer, centred, over a dimmed page). Browsers
-   without popovers show the list inline instead. */
-.modal{width:min(640px,calc(100% - 32px));max-height:min(80vh,760px);margin:auto;padding:24px;overflow:auto;border:1px solid rgba(255,255,255,.12);border-radius:20px;background:${K.navy};color:${K.text};box-shadow:0 24px 64px rgba(0,0,0,.6)}
-.modal:popover-open{animation:modal-in .25s cubic-bezier(.2,.7,.2,1)}
+   without popovers show the list inline instead. Only the list scrolls, so its scrollbar stays clear
+   of the rounded corners and the title and Close stay in view. (display is set only while open:
+   the UA hides a closed popover with display:none.) */
+.modal{width:min(640px,calc(100% - 32px));max-height:min(80vh,760px);margin:auto;padding:24px;overflow:hidden;border:1px solid rgba(255,255,255,.12);border-radius:20px;background:${K.navy};color:${K.text};box-shadow:0 24px 64px rgba(0,0,0,.6)}
+.modal:popover-open{display:flex;flex-direction:column}
 .modal::backdrop{background:rgba(3,12,29,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
-@keyframes modal-in{from{opacity:0;transform:translateY(8px) scale(.98)}}
+/* Opening and closing both animate: the modal fades and rises in, then fades and drops out, the
+   backdrop fading with it (display and the top layer stay until the transition ends). Browsers
+   without popovers skip this block and show the list inline; without @starting-style it just snaps. */
+@supports selector(:popover-open){
+.modal{opacity:0;transform:translateY(8px) scale(.98);transition:opacity .25s ease,transform .25s cubic-bezier(.2,.7,.2,1),overlay .25s allow-discrete,display .25s allow-discrete}
+.modal:popover-open{opacity:1;transform:none}
+.modal::backdrop{opacity:0;transition:opacity .25s ease,overlay .25s allow-discrete,display .25s allow-discrete}
+.modal:popover-open::backdrop{opacity:1}
+@starting-style{.modal:popover-open{opacity:0;transform:translateY(8px) scale(.98)}.modal:popover-open::backdrop{opacity:0}}
+}
 .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .modal-head h3{margin:0}
 .modal .note{margin-top:4px}
-.modal-list{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;margin:16px 0 0;padding:0}
+/* While it's open the page behind doesn't scroll, and the list's scrolling doesn't chain to it. */
+html:has(.modal:popover-open){overflow:hidden}
+.modal-list{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;margin:16px -12px 0 -2px;padding:2px 12px 2px 2px}
 .modal-list a{display:block;padding:10px 12px;border:1px solid ${LINE};border-radius:12px;background:rgba(255,255,255,.04);color:${K.text};font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .modal-list a:hover,.modal-list a:focus-visible{border-color:${K.blue};background:rgba(0,117,255,.12)}
 @media (min-width:900px){

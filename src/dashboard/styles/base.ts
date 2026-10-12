@@ -53,9 +53,11 @@ export const BASE_CSS = `*,*::before,*::after{box-sizing:border-box}
    header's top margin (it collapses through body), and on body that left a dark strip at the top. */
 html{-webkit-text-size-adjust:100%;min-height:100%;background:${PAGE_BACKGROUND};background-color:${PAGE_TOP};background-attachment:fixed;color-scheme:dark}
 /* Scrollbars everywhere (the page, the artist playlists modal, scrolling tables): a thin rounded
-   blue-grey thumb on a transparent track. Standard properties (inherited) for Chrome and Firefox;
-   the ::-webkit-scrollbar rules for Safari (browsers that support the standard ones ignore them). */
-html{scrollbar-width:thin;scrollbar-color:rgba(160,174,192,.32) transparent}
+   blue-grey thumb on a transparent track. Chrome and Safari use the ::-webkit-scrollbar rules
+   (rounded ends); the standard properties only for browsers without them (Firefox), because Chrome
+   ignores the webkit rules once they're set and draws flat-ended bars (e.g. in its mobile view).
+   Phones' own overlay scroll indicators can't be styled. */
+@supports not selector(::-webkit-scrollbar){html{scrollbar-width:thin;scrollbar-color:rgba(160,174,192,.32) transparent}}
 ::-webkit-scrollbar{width:10px;height:10px}
 ::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
 ::-webkit-scrollbar-thumb{border:2px solid transparent;border-radius:999px;background:rgba(160,174,192,.32) padding-box}
