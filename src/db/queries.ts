@@ -489,6 +489,10 @@ export async function holidayTracks(db: D1Database, minPlays: number, phrases: r
 }
 
 // --- monthly recap (plays with from <= played_at_ms < to) ---
+//
+// The queries the dashboard's Home also runs come in three parts: `recapXStmt` builds the statement,
+// `readRecapX` reads its result, and `recapX` runs it on its own (the digests). Home runs many of
+// them in one db.batch (src/dashboard/home-data.ts).
 
 export interface RecapTotals {
   plays: number;
@@ -511,8 +515,11 @@ export interface RecapArtist {
   plays: number;
 }
 
-export async function recapTotals(db: D1Database, from: number, to: number): Promise<RecapTotals> {
-  const row = await db
+const resultRows = <T>(result: D1Result): T[] => result.results as T[];
+const resultCount = (result: D1Result): number => (result.results[0] as { n?: number } | undefined)?.n ?? 0;
+
+export const recapTotalsStmt = (db: D1Database, from: number, to: number): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT COUNT(*) AS plays, COUNT(DISTINCT p.track_id) AS tracks,
               COALESCE(SUM(COALESCE(p.ms_played, t.duration_ms)), 0) AS ms,
@@ -521,13 +528,15 @@ export async function recapTotals(db: D1Database, from: number, to: number): Pro
        FROM plays p JOIN tracks t ON t.track_id = p.track_id
        WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2`,
     )
-    .bind(from, to)
-    .first<RecapTotals>();
-  return row ?? { plays: 0, tracks: 0, artists: 0, ms: 0 };
+    .bind(from, to);
+export const readRecapTotals = (result: D1Result): RecapTotals =>
+  resultRows<RecapTotals>(result)[0] ?? { plays: 0, tracks: 0, artists: 0, ms: 0 };
+export async function recapTotals(db: D1Database, from: number, to: number): Promise<RecapTotals> {
+  return readRecapTotals(await recapTotalsStmt(db, from, to).all());
 }
 
-export async function recapTopTracks(db: D1Database, from: number, to: number, limit: number): Promise<RecapTrack[]> {
-  const { results } = await db
+export const recapTopTracksStmt = (db: D1Database, from: number, to: number, limit: number): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT p.track_id, t.name, t.artists, COUNT(*) AS plays
        FROM plays p JOIN tracks t ON t.track_id = p.track_id
@@ -536,13 +545,14 @@ export async function recapTopTracks(db: D1Database, from: number, to: number, l
        ORDER BY plays DESC, MIN(p.played_at_ms)
        LIMIT ?3`,
     )
-    .bind(from, to, limit)
-    .all<RecapTrack>();
-  return results;
+    .bind(from, to, limit);
+export const readRecapTopTracks = (result: D1Result): RecapTrack[] => resultRows<RecapTrack>(result);
+export async function recapTopTracks(db: D1Database, from: number, to: number, limit: number): Promise<RecapTrack[]> {
+  return readRecapTopTracks(await recapTopTracksStmt(db, from, to, limit).all());
 }
 
-export async function recapTopArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
-  const { results } = await db
+export const recapTopArtistsStmt = (db: D1Database, from: number, to: number, limit: number): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT ta.artist_id, MAX(ta.artist_name) AS name, COUNT(*) AS plays
        FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
@@ -551,39 +561,70 @@ export async function recapTopArtists(db: D1Database, from: number, to: number, 
        ORDER BY plays DESC, MIN(p.played_at_ms)
        LIMIT ?3`,
     )
-    .bind(from, to, limit)
-    .all<RecapArtist>();
-  return results;
+    .bind(from, to, limit);
+export const readRecapTopArtists = (result: D1Result): RecapArtist[] => resultRows<RecapArtist>(result);
+export async function recapTopArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
+  return readRecapTopArtists(await recapTopArtistsStmt(db, from, to, limit).all());
 }
+
+// New tracks and artists: played in the range, no play before it. Each query starts from the
+// range's plays (a time-index search: the plays primary key, which starts with played_at_ms, or
+// idx_plays_time) and checks for an earlier play once per track or artist (idx_plays_track_time; for
+// artists through idx_track_artists_artist), rather than grouping every play before `to` (the whole
+// history). test/db/new-to-you.test.ts checks them against the old SQL and pins the query plans.
 
 /** How many tracks were played for the first time ever in the range. */
-export async function recapNewTrackCount(db: D1Database, from: number, to: number): Promise<number> {
-  const row = await db
+export const recapNewTrackCountStmt = (db: D1Database, from: number, to: number): D1PreparedStatement =>
+  db
     .prepare(
-      `SELECT COUNT(*) AS n FROM (
-         SELECT track_id FROM plays WHERE played_at_ms < ?2 GROUP BY track_id HAVING MIN(played_at_ms) >= ?1
-       )`,
+      `SELECT COUNT(*) AS n FROM (SELECT DISTINCT track_id FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2) r
+       WHERE NOT EXISTS (SELECT 1 FROM plays q WHERE q.track_id = r.track_id AND q.played_at_ms < ?1)`,
     )
-    .bind(from, to)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+    .bind(from, to);
+export const readRecapNewTrackCount = resultCount;
+export async function recapNewTrackCount(db: D1Database, from: number, to: number): Promise<number> {
+  return readRecapNewTrackCount(await recapNewTrackCountStmt(db, from, to).all());
 }
 
-/** Artists first heard in the range, most played first. */
-export async function recapNewArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
-  const { results } = await db
+/** No play before ?1 of any track credited to `a.artist_id`. */
+const NO_EARLIER_ARTIST_PLAY = `NOT EXISTS (
+         SELECT 1 FROM track_artists e JOIN plays q ON q.track_id = e.track_id
+         WHERE e.artist_id = a.artist_id AND q.played_at_ms < ?1)`;
+
+/** How many artists were heard for the first time ever in the range. */
+export const recapNewArtistCountStmt = (db: D1Database, from: number, to: number): D1PreparedStatement =>
+  db
     .prepare(
-      `SELECT ta.artist_id, MAX(ta.artist_name) AS name, COUNT(*) AS plays
-       FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
-       WHERE p.played_at_ms < ?2
-       GROUP BY ta.artist_id
-       HAVING MIN(p.played_at_ms) >= ?1
-       ORDER BY plays DESC, MIN(p.played_at_ms)
+      `SELECT COUNT(*) AS n FROM (
+         SELECT DISTINCT ta.artist_id FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
+         WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+       ) a
+       WHERE ${NO_EARLIER_ARTIST_PLAY}`,
+    )
+    .bind(from, to);
+export const readRecapNewArtistCount = resultCount;
+export async function recapNewArtistCount(db: D1Database, from: number, to: number): Promise<number> {
+  return readRecapNewArtistCount(await recapNewArtistCountStmt(db, from, to).all());
+}
+
+/** Artists first heard in the range, most played first (ties: heard first, then by id). */
+export const recapNewArtistsStmt = (db: D1Database, from: number, to: number, limit: number): D1PreparedStatement =>
+  db
+    .prepare(
+      `SELECT artist_id, name, plays FROM (
+         SELECT ta.artist_id, MAX(ta.artist_name) AS name, COUNT(*) AS plays, MIN(p.played_at_ms) AS first_ms
+         FROM plays p JOIN track_artists ta ON ta.track_id = p.track_id
+         WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
+         GROUP BY ta.artist_id
+       ) a
+       WHERE ${NO_EARLIER_ARTIST_PLAY}
+       ORDER BY plays DESC, first_ms, artist_id
        LIMIT ?3`,
     )
-    .bind(from, to, limit)
-    .all<RecapArtist>();
-  return results;
+    .bind(from, to, limit);
+export const readRecapNewArtists = (result: D1Result): RecapArtist[] => resultRows<RecapArtist>(result);
+export async function recapNewArtists(db: D1Database, from: number, to: number, limit: number): Promise<RecapArtist[]> {
+  return readRecapNewArtists(await recapNewArtistsStmt(db, from, to, limit).all());
 }
 
 /**
@@ -613,32 +654,37 @@ export async function recapReturningArtists(
   return results;
 }
 
-/** Every play time in the range (one query; the digest buckets them by local day and hour in JS). */
-export async function recapPlayTimes(db: D1Database, from: number, to: number): Promise<number[]> {
-  const { results } = await db
+/** Every play time in the range, oldest first (the digest buckets them by local day and hour in JS). */
+export const recapPlayTimesStmt = (db: D1Database, from: number, to: number): D1PreparedStatement =>
+  db
     .prepare("SELECT played_at_ms AS t FROM plays WHERE played_at_ms >= ?1 AND played_at_ms < ?2 ORDER BY played_at_ms")
-    .bind(from, to)
-    .all<{ t: number }>();
-  return results.map((r) => r.t);
+    .bind(from, to);
+export const readRecapPlayTimes = (result: D1Result): number[] => resultRows<{ t: number }>(result).map((r) => r.t);
+export async function recapPlayTimes(db: D1Database, from: number, to: number): Promise<number[]> {
+  return readRecapPlayTimes(await recapPlayTimesStmt(db, from, to).all());
 }
 
-/** Plays in each [start, end) ms range, in order (e.g. one range per month). */
-export async function recapRangeCounts(db: D1Database, ranges: Array<[number, number]>): Promise<number[]> {
-  if (!ranges.length) return [];
-  const { results } = await db
+/**
+ * Plays in each [start, end) ms range, in order (e.g. one range per month or day). The ranges are
+ * one bound JSON array, so any number of them costs one parameter.
+ */
+export const recapRangeCountsStmt = (db: D1Database, ranges: Array<[number, number]>): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT r.key AS i, (SELECT COUNT(*) FROM plays p
                            WHERE p.played_at_ms >= json_extract(r.value, '$[0]') AND p.played_at_ms < json_extract(r.value, '$[1]')) AS plays
        FROM json_each(?1) r ORDER BY r.key`,
     )
-    .bind(JSON.stringify(ranges))
-    .all<{ i: number; plays: number }>();
-  return results.map((r) => r.plays);
+    .bind(JSON.stringify(ranges));
+export const readRecapRangeCounts = (result: D1Result): number[] => resultRows<{ i: number; plays: number }>(result).map((r) => r.plays);
+export async function recapRangeCounts(db: D1Database, ranges: Array<[number, number]>): Promise<number[]> {
+  if (!ranges.length) return [];
+  return readRecapRangeCounts(await recapRangeCountsStmt(db, ranges).all());
 }
 
 /** Most played genres in the range, counting each play once under its primary artist's genres. */
-export async function recapGenres(db: D1Database, from: number, to: number, limit: number): Promise<Array<{ genre: string; plays: number }>> {
-  const { results } = await db
+export const recapGenresStmt = (db: D1Database, from: number, to: number, limit: number): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT g.value AS genre, COUNT(*) AS plays
        FROM plays p
@@ -648,22 +694,24 @@ export async function recapGenres(db: D1Database, from: number, to: number, limi
        WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
        GROUP BY g.value ORDER BY plays DESC, g.value LIMIT ?3`,
     )
-    .bind(from, to, limit)
-    .all<{ genre: string; plays: number }>();
-  return results;
+    .bind(from, to, limit);
+export const readRecapGenres = (result: D1Result): Array<{ genre: string; plays: number }> => resultRows<{ genre: string; plays: number }>(result);
+export async function recapGenres(db: D1Database, from: number, to: number, limit: number): Promise<Array<{ genre: string; plays: number }>> {
+  return readRecapGenres(await recapGenresStmt(db, from, to, limit).all());
 }
 
 /** Plays in the range of tracks that had been played before it. */
-export async function recapRepeatPlays(db: D1Database, from: number, to: number): Promise<number> {
-  const row = await db
+export const recapRepeatPlaysStmt = (db: D1Database, from: number, to: number): D1PreparedStatement =>
+  db
     .prepare(
       `SELECT COUNT(*) AS n FROM plays p
        WHERE p.played_at_ms >= ?1 AND p.played_at_ms < ?2
          AND EXISTS (SELECT 1 FROM plays q WHERE q.track_id = p.track_id AND q.played_at_ms < ?1)`,
     )
-    .bind(from, to)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
+    .bind(from, to);
+export const readRecapRepeatPlays = resultCount;
+export async function recapRepeatPlays(db: D1Database, from: number, to: number): Promise<number> {
+  return readRecapRepeatPlays(await recapRepeatPlaysStmt(db, from, to).all());
 }
 
 // --- digest highlights (src/editor/highlights.ts; plays with from <= played_at_ms < to) ---

@@ -39,7 +39,7 @@ describe("D1 schema migration", () => {
     ).all<{ version: number }>();
 
     // v7 baseline records Python's 1-7 so a rollback export doesn't re-run them.
-    expect(versions.results.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(versions.results.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   });
 
   it("v9 adds the export's per-play fields to plays", async () => {
@@ -65,6 +65,11 @@ describe("D1 schema migration", () => {
     ]);
     const pk = await env.DB.prepare("SELECT name FROM pragma_table_info('import_plays') WHERE pk > 0 ORDER BY pk").all<{ name: string }>();
     expect(pk.results.map((c) => c.name)).toEqual(["import_id", "played_at_ms", "track_id"]);
+  });
+
+  it("v13 indexes plays by track and time (new-to-you queries)", async () => {
+    const cols = await env.DB.prepare("SELECT name FROM pragma_index_info('idx_plays_track_time') ORDER BY seqno").all<{ name: string }>();
+    expect(cols.results.map((c) => c.name)).toEqual(["track_id", "played_at_ms"]);
   });
 
   describe("v12 (settings replace deploy vars; the env-free part)", () => {

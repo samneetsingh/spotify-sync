@@ -115,14 +115,14 @@ export class SpotifyClient {
     return resp;
   }
 
-  private async get<T>(path: string, params?: Record<string, string>): Promise<T> {
+  private async get<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
     const url = new URL(`${API_BASE}${path}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
         url.searchParams.set(k, v);
       }
     }
-    const resp = await this.request(url.toString());
+    const resp = await this.request(url.toString(), signal ? { signal } : {});
     return resp.json() as Promise<T>;
   }
 
@@ -195,16 +195,18 @@ export class SpotifyClient {
     return this.get("/me");
   }
 
-  async getArtists(ids: string[]): Promise<{ artists?: Array<SpotifyArtistFull | null> }> {
-    return this.get("/artists", { ids: ids.join(",") });
+  /** `signal` aborts the API request (and its retry), not the token refresh before it. */
+  async getArtists(ids: string[], signal?: AbortSignal): Promise<{ artists?: Array<SpotifyArtistFull | null> }> {
+    return this.get("/artists", { ids: ids.join(",") }, signal);
   }
 
   async getArtist(id: string): Promise<SpotifyArtistFull> {
     return this.get(`/artists/${id}`);
   }
 
-  async getTracks(ids: string[]): Promise<{ tracks?: Array<SpotifyTrack | null> }> {
-    return this.get("/tracks", { ids: ids.join(",") });
+  /** `signal` aborts the API request (and its retry), not the token refresh before it. */
+  async getTracks(ids: string[], signal?: AbortSignal): Promise<{ tracks?: Array<SpotifyTrack | null> }> {
+    return this.get("/tracks", { ids: ids.join(",") }, signal);
   }
 
   async getTrack(id: string): Promise<SpotifyTrack> {

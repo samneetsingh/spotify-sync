@@ -63,17 +63,25 @@ export function isoWeek(date: LocalDate): string {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
+/** One formatter per zone: creating one costs ~10x formatting with it (the Home computes ~370 midnights). */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
 function zonedParts(ms: number, timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-  }).formatToParts(ms);
+  let format = formatters.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    });
+    formatters.set(timeZone, format);
+  }
+  const parts = format.formatToParts(ms);
   const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
   return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute"), second: get("second") };
 }

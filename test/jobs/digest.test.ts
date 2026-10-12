@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getState, setState } from "../../src/db/state";
 import { migrate } from "../../src/db/schema";
-import { bucket, lastPeriod, pickImage, renderDigest, runMonthlyRecap, runWeeklyDigest, type DigestData } from "../../src/jobs/digest";
+import { bucket, lastPeriod, LAST_DIGEST_KEY, pickImage, previewDigest, renderDigest, runMonthlyRecap, runWeeklyDigest, type DigestData } from "../../src/jobs/digest";
 import { addDays } from "../../src/utils/time";
 import { resetDb } from "../parity/spotify-fixture";
 import { TZ, artSource, config, days, fakeEmail, seed } from "./digest-helpers";
@@ -169,6 +169,30 @@ describe("weekly digest", () => {
     const { sent, cfg } = fakeEmail();
     expect(await runWeeklyDigest(config(), env.DB, artSource().sp, cfg, OCT_7)).toBeNull();
     expect(sent).toEqual([]);
+  });
+});
+
+describe("digest:last (the dashboard's latest digest)", () => {
+  const WEEK = [{ id: "w", name: "This Week", artist: ["W1", "Weekly"] as [string, string], at: ["2026-09-28T18:00:00Z", "2026-10-02T18:00:00Z"] }];
+  const lastDigest = async () => JSON.parse((await getState(env.DB, LAST_DIGEST_KEY)) ?? "null");
+
+  it("is written after a live send, with the email's subject and period label", async () => {
+    await seed([...WEEK, ...SEPTEMBER]);
+    const { sent, cfg } = fakeEmail();
+    await runWeeklyDigest(config(), env.DB, artSource().sp, cfg, OCT_7);
+    expect(await lastDigest()).toEqual({ kind: "week", subject: sent[0]!.subject, period: "Sep 28 to Oct 4", sentAt: OCT_7 });
+    await runMonthlyRecap(config(), env.DB, artSource().sp, cfg, OCT_11);
+    expect(await lastDigest()).toEqual({ kind: "month", subject: sent[1]!.subject, period: "September 2026", sentAt: OCT_11 });
+  });
+
+  it("is not written by previews, dry runs or failed sends", async () => {
+    await seed(WEEK);
+    const { sent, cfg } = fakeEmail();
+    expect(await previewDigest("week", config(), env.DB, artSource().sp, cfg, OCT_7)).toEqual({ period: "2026-W40", sent: true });
+    expect(sent[0]!.subject).toMatch(/^\[Preview\] /);
+    expect(await runWeeklyDigest(config("dry_run"), env.DB, artSource().sp, cfg, OCT_7)).toEqual({ period: "2026-W40", sent: false });
+    await expect(runWeeklyDigest(config(), env.DB, artSource().sp, fakeEmail({ fail: true }).cfg, OCT_7)).rejects.toThrow(/could not be sent/);
+    expect(await getState(env.DB, LAST_DIGEST_KEY)).toBeNull();
   });
 });
 

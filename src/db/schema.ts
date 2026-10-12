@@ -239,6 +239,12 @@ const DASHBOARD_SETTINGS = [
   `DELETE FROM state WHERE key = 'reconnect'`,
 ];
 
+/**
+ * v13, the dashboard's Home: "is there a play of this track before X" is one index seek
+ * (recapNewTrackCount, recapNewArtists, recapNewArtistCount in src/db/queries.ts).
+ */
+const PLAYS_BY_TRACK_TIME = [`CREATE INDEX IF NOT EXISTS idx_plays_track_time ON plays(track_id, played_at_ms)`];
+
 interface Migration {
   version: number;
   statements: string[];
@@ -255,6 +261,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 10, statements: DASHBOARD },
   { version: 11, statements: IMPORTS },
   { version: 12, statements: DASHBOARD_SETTINGS },
+  { version: 13, statements: PLAYS_BY_TRACK_TIME },
 ];
 
 export function migrationStatements(m: Migration): string[] {
