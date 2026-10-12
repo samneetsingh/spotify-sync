@@ -1,5 +1,5 @@
 // Styles for the Import page and the auth problem pages (only what styles/base.ts's shared classes
-// don't cover). Owner: builder I.
+// don't cover).
 //
 // - Upload: the file input itself is the drop zone (browsers accept dropped files on it), a dashed
 //   well that turns solid mint once files are chosen (`:valid`, the input is required) and dims while

@@ -1,6 +1,6 @@
 // The new Home's styles: the 12-column grid, the vinyl hero, stat tiles, charts (columns, range
 // switch, heatmap, meters, split bar, streak dots), track and artist rows, empty states, the status
-// banner and the settings widget. Owner: builder U. Shared classes (card, chip, switch, btn, notice,
+// banner and the settings widget. Shared classes (card, chip, switch, btn, notice,
 // tables) are in base.ts. Colours are classes, never attributes, so the CSP's no-`style=` rule holds.
 
 import { CHART, COLOR as K, FONT, LINE, LINE_STRONG, SHADOW, TINT, ty } from "../tokens";

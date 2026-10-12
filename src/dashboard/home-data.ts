@@ -2,7 +2,7 @@
 // that derive the day bars, streak, best day and ranges (exported for tests). Times are epoch ms and
 // every range is [from, to); days are local days in the owner's time zone, from the DST-safe
 // midnights in src/utils/time.ts. Art comes from the `dashboard:art` cache only; fillArt (./art.ts)
-// fetches what's missing. HomeData is the contract with the Home view: change its shapes through the lead.
+// fetches what's missing. HomeData is the contract with the Home view (home-view.tsx).
 
 import { FAILING_PREFIX } from "../alerts";
 import {

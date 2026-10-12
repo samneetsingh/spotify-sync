@@ -1,4 +1,4 @@
-// The dashboard's base stylesheet: the "After hours" look (src/dashboard/tokens.ts, tasks/home-design.md)
+// The dashboard's base stylesheet: the "After hours" look (src/dashboard/tokens.ts)
 // for every shared class. styles/index.ts appends the per-page parts after it, so they can override.
 // renderPage inlines it in one <style nonce> element; the CSP blocks `style=` attributes, so markup
 // uses these classes only. Mobile-first: base rules are the phone layout, min-width blocks upgrade.

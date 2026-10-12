@@ -1,4 +1,4 @@
-// The new Home (tasks/home-design.md, "After hours"): the page body under the shell's (visually
+// The new Home ("After hours" design): the page body under the shell's (visually
 // hidden) "Home" heading. Pure rendering from HomeData (./home-data.ts), so it is easy to test and to
 // screenshot. Every widget is a <section> with an <h2>; each has its own empty state, and a quiet
 // period shows zeros rather than a blank chart. Times are in data.timeZone; dates in HomeData are

@@ -1,4 +1,4 @@
-// The dashboard's one stylesheet, inlined by renderPage in a <style nonce> element. Split by owner so
+// The dashboard's one stylesheet, inlined by renderPage in a <style nonce> element. Split by page group so
 // parts can change independently; base comes first, so later parts can override it.
 
 import { BASE_CSS } from "./base";

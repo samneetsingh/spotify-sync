@@ -1,4 +1,4 @@
-// Styles for Manage, Settings, Activity and the landing page. Owner: builder P. The shared classes
+// Styles for Manage, Settings, Activity and the landing page. The shared classes
 // (cards, rows, facts, pills, buttons, forms, the disc) are in base.ts; only page-specific rules here.
 
 import { COLOR as K, TINT } from "../tokens";

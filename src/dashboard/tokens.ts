@@ -1,4 +1,4 @@
-// The "After hours" design tokens for the dashboard (tasks/home-design.md): a late-night listening
+// The "After hours" design tokens for the dashboard: a late-night listening
 // room, deep blue-indigo with a warm apricot accent and mint for "ok". Contrast ratios in the
 // comments are against the panel. The emails keep their own tokens (src/email/layout.ts).
 
