@@ -203,17 +203,31 @@ export function settingLines(v: StatusView, labels: Record<SettingKey, string>):
   }
   if (on("artistPlaylists")) {
     const artists = v.status.artistPlaylists;
+    // A popover modal (the HTML popover API: no script; Esc or a click outside closes it). The
+    // buttons are type=button, since this sits inside the settings form.
+    const count = `${fmt(artists.length)} artist playlist${artists.length === 1 ? "" : "s"}`;
     lines.artistPlaylists = artists.length ? (
-      <details>
-        <summary>{`${fmt(artists.length)} artist playlist${artists.length === 1 ? "" : "s"}`}</summary>
-        <ul class="tags">
-          {artists.map((a) => (
-            <li>
-              <a href={playlistUrl(a.id)}>{a.name}</a>
-            </li>
-          ))}
-        </ul>
-      </details>
+      <>
+        <button type="button" class="btn btn-secondary btn-small" popovertarget="artist-playlists">
+          {`View ${count}`}
+        </button>
+        <div id="artist-playlists" class="modal" popover="auto" role="dialog" aria-labelledby="artist-playlists-title">
+          <div class="modal-head">
+            <h3 id="artist-playlists-title">{count}</h3>
+            <button type="button" class="btn btn-secondary btn-small" popovertarget="artist-playlists" popovertargetaction="hide">
+              Close
+            </button>
+          </div>
+          <p class="note">One per artist you play a lot, updated every night.</p>
+          <ul class="modal-list">
+            {artists.map((a) => (
+              <li>
+                <a href={playlistUrl(a.id)}>{a.name}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </>
     ) : (
       "None yet: an artist gets one once you've played them a lot."
     );

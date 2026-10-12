@@ -101,10 +101,14 @@ describe("settings page status", () => {
     expect(html).toContain('href="https://open.spotify.com/playlist/pl-ff"');
   });
 
-  it("lists artist playlists in a <details>, escaped", async () => {
+  it("lists artist playlists in a popover modal opened by a non-submitting button, escaped", async () => {
     await env.DB.prepare("INSERT INTO playlists(playlist_id, name, artist_name, playlist_type) VALUES('pl1', ?1, ?1, 'artist')").bind(`${XSS} This Is`).run();
     const html = await page();
-    expect(html).toContain(`<details><summary>1 artist playlist</summary><ul class="tags"><li><a href="https://open.spotify.com/playlist/pl1">&lt;script&gt;`);
+    expect(html).toContain(`<button type="button" class="btn btn-secondary btn-small" popovertarget="artist-playlists">View 1 artist playlist</button>`);
+    expect(html).toContain(`<div id="artist-playlists" class="modal" popover="auto" role="dialog" aria-labelledby="artist-playlists-title">`);
+    expect(html).toContain(`popovertarget="artist-playlists" popovertargetaction="hide">Close</button>`);
+    expect(html).toContain(`<ul class="modal-list"><li><a href="https://open.spotify.com/playlist/pl1">&lt;script&gt;`);
+    expect(html).not.toContain("<details>");
   });
 
   it("hides previews when email isn't set up in live mode and shows AI usage with a key", async () => {
