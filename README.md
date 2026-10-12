@@ -1,5 +1,7 @@
 # spotify-sync
 
+[![CI](https://github.com/samneetsingh/spotify-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/samneetsingh/spotify-sync/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A Cloudflare Worker that keeps your Spotify library tidy from your listening history, with a small dashboard on your own domain:
 
 - **Every 10 minutes**: records recently played tracks in D1, adds tracks with enough plays to a **Frequent Plays** playlist and, if you switch it on, adds every track you play to **Liked Songs**.
