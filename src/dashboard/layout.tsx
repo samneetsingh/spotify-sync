@@ -9,6 +9,7 @@ import { localTime as alertTime } from "../alerts";
 import type { Session } from "../auth";
 import { esc } from "../email/layout";
 import { cspNonce, html } from "../http";
+import { COLOR, DISPLAY_FONT_URL } from "./tokens";
 import { Notice as NoticeView, PostButton } from "./components/primitives";
 import { raw, render } from "./render";
 import { CSS } from "./styles";
@@ -38,8 +39,13 @@ export interface PageOptions {
   scripts?: string[];
   /** HTTP status, default 200. Headers (e.g. Set-Cookie) can be appended to the returned Response. */
   status?: number;
-  /** "narrow": a centred single column (the logged-out landing page). Default: the dashboard column. */
-  layout?: "default" | "narrow";
+  /**
+   * "narrow": a centred single column (the logged-out landing page); "wide": the Home grid, up to
+   * 1600px (the header lines up with it). Default: the dashboard column.
+   */
+  layout?: "default" | "narrow" | "wide";
+  /** Keep the <h1> for screen readers and the tab title only (Home, whose hero leads the page). */
+  hideTitle?: boolean;
   /** Show the Import nav item (default true; the dashboard hides it when the import bindings are missing). */
   importEnabled?: boolean;
 }
@@ -140,8 +146,9 @@ export type ShellOptions = Omit<PageOptions, "body" | "status">;
  * with the notice, the <h1> and the children. `nonce` goes on the one <style>.
  */
 export function Page(props: ShellOptions & { nonce: string; children?: Child }) {
-  const { title, session, notice } = props;
+  const { title, session, notice, layout } = props;
   const items = NAV.filter((n) => n.key !== "import" || props.importEnabled !== false);
+  const mainClass = [layout === "narrow" || layout === "wide" ? layout : "", props.hideTitle ? "hide-title" : ""].filter(Boolean).join(" ");
   return (
     <html lang="en">
       <head>
@@ -149,6 +156,8 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <meta name="robots" content="noindex" />
         <meta name="color-scheme" content="dark" />
+        <meta name="theme-color" content={COLOR.ink} />
+        <link rel="preload" href={DISPLAY_FONT_URL} as="font" type="font/woff2" crossorigin="" />
         {props.refreshSeconds ? <meta http-equiv="refresh" content={String(Math.max(1, Math.floor(props.refreshSeconds)))} /> : null}
         <title>{title} · spotify-sync</title>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -161,7 +170,7 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
         <a class="skip" href="#main">
           Skip to content
         </a>
-        <header class={session ? "top" : "top bare"}>
+        <header class={`top${session ? "" : " bare"}${layout === "wide" ? " wide" : ""}`}>
           <a class="brand" href="/">
             <span class="mark" aria-hidden="true"></span>spotify-sync
           </a>
@@ -184,7 +193,7 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
             </>
           ) : null}
         </header>
-        <main id="main" class={props.layout === "narrow" ? "narrow" : undefined}>
+        <main id="main" class={mainClass || undefined}>
           {notice ? <NoticeView {...notice} /> : null}
           <h1>{title}</h1>
           {props.children}
