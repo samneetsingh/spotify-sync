@@ -7,10 +7,10 @@
 // - GET  /auth/callback         the one OAuth redirect URI: claim, login and reconnect
 // - POST /logout, /logout/all   this session / every session
 // - GET  /reconnect             legacy alert links: 302 to /login ("reconnect" is now logging in)
+// The pages these routes answer with (expired login, wrong account, ...) are in pages.tsx.
 
 import { logActivity } from "../activity";
 import { sendEmail } from "../alerts";
-import { renderPage, ui } from "../dashboard";
 import { getState } from "../db/state";
 import type { Env } from "../env";
 import { welcomeEmail } from "../emails/account";
@@ -22,40 +22,25 @@ import { constantTimeEqual } from "../utils/crypto";
 import { canSendClaim, CLAIM_KEY, isValidClaimNonce, resendClaimEmail, sentTime } from "./claim";
 import { canLogIn, clearOAuthCookie, completeOAuth, publicOrigin, readOAuthCookie, safeNext, startOAuth, type OAuthState, type SpotifyLogin } from "./oauth";
 import { getOwner, OWNER_KEY, saveLoginStatements, type Owner } from "./owner";
+import {
+  alreadySetUpPage,
+  checkEmailPage,
+  claimLinkPage,
+  loginCancelledPage,
+  loginExpiredPage,
+  loginMismatchPage,
+  methodNotAllowedPage,
+  resendFailedPage,
+  spotifyFailedPage,
+  unconfiguredPage,
+  wrongAccountPage,
+} from "./pages";
 import { createSession, endAllSessions, endSession, getSession } from "./session";
 
 export { ensureClaimEmail, type ClaimEmailResult } from "./claim";
 export { getOwner, type Owner } from "./owner";
 export { getSession, SESSION_COOKIE, SESSION_TTL_MS, type Session } from "./session";
 export { safeNext } from "./oauth";
-
-// ---------------------------------------------------------------------------- pages
-
-const p = (text: string) => `<p>${ui.esc(text)}</p>`;
-const actions = (...buttons: string[]) => `<div class="actions">${buttons.join("")}</div>`;
-
-/** A logged-out page; `headers` are added to the response (Set-Cookie). */
-function page(status: number, title: string, bodyHtml: string, headers: Record<string, string> = {}): Response {
-  const res = renderPage({ title, session: null, status, body: bodyHtml });
-  for (const [k, v] of Object.entries(headers)) res.headers.append(k, v);
-  return res;
-}
-
-const unconfiguredPage = (headers?: Record<string, string>) =>
-  page(503, "Setup isn't finished", p("Whoever deployed spotify-sync still needs to finish setting it up. Try again later."), headers);
-
-const resendForm = () => ui.postButton("/claim/resend", "Email the owner a new link", { variant: "primary" });
-
-function claimLinkPage(status: number, offerResend: boolean, headers?: Record<string, string>): Response {
-  const body = p("Setup links work once and expire after 7 days.") + (offerResend ? actions(resendForm()) : actions(ui.linkButton("/", "Go to the dashboard")));
-  return page(status, "This setup link doesn't work anymore", body, headers);
-}
-
-const methodNotAllowed = (allow: string) => {
-  const res = page(405, "Not allowed", p("That page can't be opened this way."));
-  res.headers.set("Allow", allow);
-  return res;
-};
 
 // ---------------------------------------------------------------------------- routes
 
@@ -67,7 +52,7 @@ const methodNotAllowed = (allow: string) => {
 export async function handleAuthRoutes(request: Request, env: Env, ctx: ExecutionContext, now = Date.now()): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method === "HEAD" ? "GET" : request.method;
-  const route = (allowed: "GET" | "POST", handler: () => Promise<Response> | Response) => (method === allowed ? handler() : methodNotAllowed(allowed === "GET" ? "GET, HEAD" : "POST"));
+  const route = (allowed: "GET" | "POST", handler: () => Promise<Response> | Response) => (method === allowed ? handler() : methodNotAllowedPage(allowed === "GET" ? "GET, HEAD" : "POST"));
   switch (url.pathname) {
     case "/reconnect":
       return route("GET", () => redirect("/login", 302));
@@ -118,14 +103,9 @@ async function resend(env: Env, now: number): Promise<Response> {
     case "unconfigured":
       return unconfiguredPage();
     case "failed":
-      return page(503, "Couldn't send the email", p("The setup email didn't go out. Try again in a few minutes."));
+      return resendFailedPage();
     default:
-      return page(
-        200,
-        "Check your email",
-        p(`The latest setup link went to the owner's email at ${sentTime(env, result.sentAt)}. If it isn't in the inbox, check spam.`) +
-          p("Links work once, for 7 days. You can ask for another an hour after the last one, up to 5 a day."),
-      );
+      return checkEmailPage(sentTime(env, result.sentAt));
   }
 }
 
@@ -133,16 +113,13 @@ async function resend(env: Env, now: number): Promise<Response> {
 async function callback(request: Request, env: Env, ctx: ExecutionContext, url: URL, now: number): Promise<Response> {
   const clear = { "Set-Cookie": clearOAuthCookie(env) };
   const state = readOAuthCookie(request, env, now);
-  const tryAgain = actions(ui.linkButton("/login", "Log in again", "primary"));
-  if (!state) return page(400, "That login took too long", p("Start again: logins have to finish within 10 minutes.") + tryAgain, clear);
-  if (!(await constantTimeEqualSafe(url.searchParams.get("state"), state.s))) {
-    return page(400, "That login didn't match", p("This page was opened from a different login. Start again from the dashboard.") + tryAgain, clear);
-  }
-  const retry = state.p === "claim" ? p("Open the setup link in the email again to retry.") : tryAgain;
-  if (url.searchParams.has("error")) return page(400, "Login cancelled", p("Spotify didn't finish the login, so nothing changed.") + retry, clear);
+  if (!state) return loginExpiredPage(clear);
+  if (!(await constantTimeEqualSafe(url.searchParams.get("state"), state.s))) return loginMismatchPage(clear);
+  const claiming = state.p === "claim";
+  if (url.searchParams.has("error")) return loginCancelledPage("error", claiming, clear);
   const code = url.searchParams.get("code");
   const origin = publicOrigin(env);
-  if (!code) return page(400, "Login cancelled", p("Spotify didn't send a login code, so nothing changed.") + retry, clear);
+  if (!code) return loginCancelledPage("no-code", claiming, clear);
   if (!origin || !canLogIn(env)) return unconfiguredPage(clear);
 
   let me: SpotifyLogin;
@@ -150,7 +127,7 @@ async function callback(request: Request, env: Env, ctx: ExecutionContext, url: 
     me = await completeOAuth(env, origin, code);
   } catch (err) {
     console.error(JSON.stringify({ auth: "spotify login failed", purpose: state.p, error: err instanceof Error ? err.message : String(err) }));
-    return page(502, "Couldn't reach Spotify", p("Spotify didn't accept the login. Nothing changed; try again in a minute.") + retry, clear);
+    return spotifyFailedPage(claiming, clear);
   }
   const ctxInfo: LoginContext = { request, env, ctx, me, state, now, clear };
   return state.p === "claim" ? completeClaim(ctxInfo) : completeLogin(ctxInfo, await getOwner(env.DB, env));
@@ -177,13 +154,13 @@ async function completeClaim(c: LoginContext): Promise<Response> {
     // Already claimed (another tab, or SPOTIFY_USER_ID added since): the owner just logs in.
     if (owner.id === me.id) return completeLogin(c, owner);
     if (owner.source === "config") return wrongAccount(c);
-    return page(409, "Already set up", p("Another Spotify account finished setting up spotify-sync first. Nothing changed for your account."), clear);
+    return alreadySetUpPage(clear);
   }
   if (!(await isValidClaimNonce(db, c.state.k, now))) return claimLinkPage(400, canSendClaim(env), clear);
 
   await db.prepare("INSERT INTO state (key, value, updated_at) VALUES (?1, ?2, datetime('now')) ON CONFLICT(key) DO NOTHING").bind(OWNER_KEY, me.id).run();
   if ((await getState(db, OWNER_KEY)) !== me.id) {
-    return page(409, "Already set up", p("Another Spotify account finished setting up spotify-sync first. Nothing changed for your account."), clear);
+    return alreadySetUpPage(clear);
   }
   const claimed: Owner = { id: me.id, source: "claimed" };
   await db.batch([...saveLoginStatements(db, claimed, me, me.refreshToken), db.prepare("DELETE FROM state WHERE key = ?1").bind(CLAIM_KEY)]);
@@ -217,13 +194,7 @@ async function completeLogin(c: LoginContext, owner: Owner | null): Promise<Resp
 function wrongAccount(c: LoginContext): Response {
   console.warn(JSON.stringify({ auth: "wrong account", account: c.me.id }));
   const next = c.state.n && c.state.n !== "/" ? `&next=${encodeURIComponent(c.state.n)}` : "";
-  return page(
-    403,
-    "That's a different Spotify account",
-    p(`You logged in to Spotify as ${accountName(c.me)}. Only the owner's Spotify account can use this dashboard, so nothing changed.`) +
-      actions(ui.linkButton(`/login?switch=1${next}`, "Use a different Spotify account", "primary")),
-    c.clear,
-  );
+  return wrongAccountPage(accountName(c.me), `/login?switch=1${next}`, c.clear);
 }
 
 function sessionHeaders(sessionCookie: string, clear: Record<string, string>): Headers {
