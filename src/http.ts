@@ -1,7 +1,8 @@
 // HTTP plumbing for the owner dashboard: HTML responses with the security headers, redirects,
 // cookies and the CSRF (Origin) check. Pages themselves are built in src/dashboard.
 
-import { C, FONT, TY, esc } from "./email/layout";
+import { COLOR, DISPLAY_FONT_URL } from "./dashboard/tokens";
+import { esc } from "./email/layout";
 
 /** A fresh CSP nonce (128 random bits, base64). Use one per response. */
 export function cspNonce(): string {
@@ -85,12 +86,13 @@ export function redirect(location: string, status: 302 | 303 = 303, headers?: He
 /** "See other": after a POST, and for pages that moved. */
 export const redirect303 = (location: string, headers?: HeadersInit): Response => redirect(location, 303, headers);
 
-const PAGE_CSS = `body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${C.page};color:${C.text};font-family:${FONT}}
+const PAGE_CSS = `@font-face{font-family:"Bricolage Grotesque";src:url(${DISPLAY_FONT_URL}) format("woff2");font-weight:200 800;font-display:swap}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${COLOR.ink};color:${COLOR.text};font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 main{max-width:420px;padding:40px 24px;text-align:center}
-h1{${TY.number};margin:0 0 12px}
-p{${TY.body};color:${C.soft};margin:0 0 24px}
-a{color:${C.green};${TY.body}}
-a:focus-visible{outline:2px solid ${C.green};outline-offset:2px}`;
+h1{font:700 28px/32px "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 12px}
+p{font-size:16px;line-height:24px;color:${COLOR.soft};margin:0 0 24px}
+a{color:${COLOR.accent};font-size:16px;line-height:24px;text-underline-offset:3px}
+a:focus-visible{outline:2px solid ${COLOR.accent};outline-offset:2px}`;
 
 /**
  * A small standalone page (404, 403, 500, 401) for responses outside the dashboard layout. Text

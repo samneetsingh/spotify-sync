@@ -71,6 +71,8 @@ const NEW_ARTISTS = 3;
 export const HOURS_DAYS = 28;
 /** The year chart: this many months, the current one included. */
 export const YEAR_MONTHS = 12;
+/** How many local days back the streak can count (Home shows "400+ days" at the cap). */
+export const STREAK_DAYS = 400;
 
 const TOKEN_KEY = "spotify_refresh_token";
 const RECAP_KEYS: Record<DigestKind, string> = { week: "recap:last_week", month: "recap:last_month" };
@@ -219,9 +221,11 @@ export async function loadHome(db: D1Database, { now, timeZone }: { now: number;
   const at = (d: LocalDate) => zonedMidnight(d, timeZone);
   const today = zonedDate(now, timeZone);
   const { week, month } = soFarRanges(now, timeZone);
-  // Daily plays from the 1st of the month YEAR_MONTHS - 1 months ago through today: the day bars,
-  // the year chart, the streak and this year's best day all come from these.
-  const days = localDays(addMonths(today, 1 - YEAR_MONTHS), today);
+  // Daily plays from STREAK_DAYS days ago (always before the 1st of the month YEAR_MONTHS - 1 months
+  // ago) through today: the day bars, the year chart, the streak and this year's best day all come from
+  // these. A rolling window, so the streak never drops on the 1st of a month while it continues.
+  const firstDay = [addMonths(today, 1 - YEAR_MONTHS), addDays(today, 1 - STREAK_DAYS)].sort((a, b) => formatDate(a).localeCompare(formatDate(b)))[0]!;
+  const days = localDays(firstDay, today);
   const midnights = [...days, addDays(today, 1)].map(at);
   const throwbackMonths = THROWBACK_YEARS.map((y) => ({ year: today.year - y, month: today.month, day: 1 }));
   const hourDays = days.slice(-HOURS_DAYS);

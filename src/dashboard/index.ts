@@ -145,7 +145,8 @@ async function toggleSetting(request: Request, env: Env): Promise<Response> {
   const one = new FormData();
   one.set(def.key, value);
   const result = await saveSettings(env.DB, env, one);
-  return redirect303(result.ok ? "/?ok=saved#settings" : "/?error=toggle-failed");
+  if (!result.ok) return redirect303("/?error=toggle-failed");
+  return redirect303(`/?ok=${result.changed.length ? "saved" : "unchanged"}#settings`);
 }
 
 async function activityPage(env: Env, session: Session, url: URL): Promise<Response> {

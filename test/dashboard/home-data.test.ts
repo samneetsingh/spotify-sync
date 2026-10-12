@@ -3,7 +3,7 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ART_KEY } from "../../src/dashboard/art";
-import { bestDay, dayBars, loadHome, localDays, monthBars, monthDates, soFarRanges, streak, weekDates, type HomeData } from "../../src/dashboard/home-data";
+import { bestDay, dayBars, loadHome, localDays, monthBars, monthDates, soFarRanges, STREAK_DAYS, streak, weekDates, type HomeData } from "../../src/dashboard/home-data";
 import { nextDigestRun, periodLabel } from "../../src/dashboard/next-digest";
 import { migrate } from "../../src/db/schema";
 import { setState } from "../../src/db/state";
@@ -261,6 +261,16 @@ describe("loadHome", () => {
     expect((await load(NOW)).streak).toBe(2); // today and yesterday
     await env.DB.prepare("DELETE FROM plays WHERE played_at_ms = ?1").bind(Date.parse("2026-10-13T18:00:00Z")).run();
     expect((await load(NOW)).streak).toBe(1); // today only
+  });
+
+  it("counts a streak longer than the year chart, up to STREAK_DAYS (a rolling window, not month-aligned)", async () => {
+    // One play a day at 11 AM PDT/PST for the 420 days up to today (Oct 14): longer than the window.
+    const day = (i: number) => new Date(NOW - i * 86_400_000).toISOString();
+    await playsAt("long", Array.from({ length: 420 }, (_, i) => day(i)));
+    expect((await load(NOW)).streak).toBe(STREAK_DAYS);
+    // A gap 380 days ago: the streak (379 days) reaches back past Nov 1, 2025, where the year chart starts.
+    await env.DB.prepare("DELETE FROM plays WHERE played_at_ms = ?1").bind(Date.parse(day(379))).run();
+    expect((await load(NOW)).streak).toBe(379);
   });
 
   it("finds the best day of this calendar year only", async () => {

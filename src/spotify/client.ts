@@ -29,6 +29,7 @@ export interface SpotifyAction {
 export class SpotifyClient {
   private accessToken: string | null = null;
   private tokenExpiresAt = 0;
+  private tokenRefresh: Promise<string> | null = null;
   private readonly spotifyWritesEnabled: boolean;
   private actions: SpotifyAction[] = [];
 
@@ -45,7 +46,15 @@ export class SpotifyClient {
     if (this.accessToken && Date.now() < this.tokenExpiresAt) {
       return this.accessToken;
     }
+    // Concurrent requests (e.g. getTracks and getArtists in parallel) share one refresh, so a
+    // rotated refresh token is saved once and never overwritten by a slower, older response.
+    this.tokenRefresh ??= this.refreshToken().finally(() => {
+      this.tokenRefresh = null;
+    });
+    return this.tokenRefresh;
+  }
 
+  private async refreshToken(): Promise<string> {
     const refreshToken = await getState(this.db, "spotify_refresh_token");
     if (!refreshToken) {
       throw new SpotifyError("No refresh token in D1 state table", 0);

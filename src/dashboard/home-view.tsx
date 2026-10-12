@@ -15,7 +15,7 @@ import { LinkButton, Pill } from "./components/primitives";
 import { SettingsWidget } from "./components/settings-widget";
 import { delta, StatTile } from "./components/stats";
 import { Banner, EmptyState, StatusChip } from "./components/status";
-import type { DayBar, HomeData, MonthBar, PeriodSoFar } from "./home-data";
+import { STREAK_DAYS, type DayBar, type HomeData, type MonthBar, type PeriodSoFar } from "./home-data";
 import { ago } from "./layout";
 import { runDay } from "./next-digest";
 
@@ -199,7 +199,7 @@ function Streak({ data, today }: { data: HomeData; today: string }) {
         <h2 id="streak-title">Streak</h2>
       </div>
       <p class="big">
-        <span class="big-value num">{fmt(n)}</span> <span class="big-unit">{n === 1 ? "day" : "days"}</span>
+        <span class="big-value num">{n >= STREAK_DAYS ? `${fmt(STREAK_DAYS)}+` : fmt(n)}</span> <span class="big-unit">{n === 1 ? "day" : "days"}</span>
       </p>
       <p class="soft streak-text">{sentence}</p>
       <StreakDots days={days} label={`This week: played on ${played} of ${elapsed} ${elapsed === 1 ? "day" : "days"} so far`} />

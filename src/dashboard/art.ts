@@ -72,10 +72,12 @@ export async function fillArt(env: Env, ctx: Pick<ExecutionContext, "waitUntil">
 async function fetchArt(env: Env, ctx: Pick<ExecutionContext, "waitUntil">, tracks: string[], artists: string[]): Promise<ArtMap> {
   const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, env.DB, parseWriteMode(env.WRITE_MODE));
   const signal = AbortSignal.timeout(ART_TIMEOUT_MS);
-  const work = Promise.all([tracks.length ? sp.getTracks(tracks, signal) : null, artists.length ? sp.getArtists(artists, signal) : null]);
+  const calls = [tracks.length ? sp.getTracks(tracks, signal) : null, artists.length ? sp.getArtists(artists, signal) : null] as const;
   // The signal aborts the API requests, not the token refresh before them (aborting that could lose a
-  // rotated refresh token), so keep the work alive after the response and give up waiting at the deadline.
-  ctx.waitUntil(work.catch(() => {}));
+  // rotated refresh token), so keep both calls alive after the response (allSettled: one failing early
+  // mustn't cut the other short) and give up waiting at the deadline.
+  ctx.waitUntil(Promise.allSettled(calls));
+  const work = Promise.all(calls);
   const timedOut = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
   const [t, a] = await Promise.race([work, timedOut]);
 

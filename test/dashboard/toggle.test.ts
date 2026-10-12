@@ -31,6 +31,12 @@ describe.skipIf(!settingsReady)("[integration: WP-B saveSettings] POST /settings
     expect(await rows()).toEqual({});
   });
 
+  it("says nothing changed when the setting already has that value", async () => {
+    const res = await toggle({ key: "frequent", value: "true" }); // on by default
+    expect(res.headers.get("Location")).toBe("/?ok=unchanged#settings");
+    expect(await rows()).toEqual({});
+  });
+
   it("logs the change like the settings form", async () => {
     await toggle({ key: "digestWeekly", value: "false" });
     const event = await env.DB.prepare("SELECT kind, summary FROM activity ORDER BY id DESC LIMIT 1").first<{ kind: string; summary: string }>();

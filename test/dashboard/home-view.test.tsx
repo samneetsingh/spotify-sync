@@ -169,3 +169,10 @@ describe("HomeView art lookups", () => {
     expect(out).not.toMatch(/src="(?!\/)(?!https:)/);
   });
 });
+
+describe("HomeView streak", () => {
+  it("shows the cap as \"400+\" when the streak fills the window", () => {
+    expect(view({ ...fullHome(), streak: 400 })).toContain(">400+</span>");
+    expect(view({ ...fullHome(), streak: 399 })).toContain(">399</span>");
+  });
+});
