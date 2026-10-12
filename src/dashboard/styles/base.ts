@@ -1,12 +1,13 @@
-// The dashboard's one stylesheet, built from the email design tokens (src/email/layout.ts) so pages
-// and emails share colours, type and spacing. renderPage inlines it in a <style nonce> element: the
-// CSP blocks `style=` attributes, so markup uses these classes only.
+// The dashboard's base stylesheet (styles/index.ts appends the other parts), built from the email
+// design tokens (src/email/layout.ts) so pages and emails share colours, type and spacing. renderPage
+// inlines it in a <style nonce> element: the CSP blocks `style=` attributes, so markup uses these
+// classes only.
 //
 // Mobile-first: the base rules are the phone layout; one min-width:640px block upgrades wide screens.
 // Spacing scale 4/8/12/16/20/24/32/40, the email type scale (TY), 44px touch targets, a 2px green
 // focus ring, and no motion when the visitor prefers reduced motion.
 
-import { C, FONT, MONO, TY } from "../email/layout";
+import { C, FONT, MONO, TY } from "../../email/layout";
 
 /** Translucent tints of the accent colours (pill and notice backgrounds). */
 const tint = {
@@ -15,7 +16,7 @@ const tint = {
   red: "rgba(255,92,108,.14)",
 };
 
-export const CSS = `*,*::before,*::after{box-sizing:border-box}
+export const BASE_CSS = `*,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:${C.page};color:${C.text};font-family:${FONT};${TY.body};-webkit-font-smoothing:antialiased}
 a{color:${C.green};text-underline-offset:3px}

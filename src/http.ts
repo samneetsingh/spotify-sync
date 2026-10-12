@@ -10,7 +10,8 @@ export function cspNonce(): string {
 
 /**
  * Inline styles only through `<style nonce>` (no `style=` attributes), scripts only from our origin
- * (public/import.js), images from us and Spotify's CDN, forms to us and Spotify's login.
+ * (public/import.js), images from us and Spotify's CDN, fonts from us (self-hosted), forms to us and
+ * Spotify's login.
  */
 export function contentSecurityPolicy(nonce: string): string {
   return [
@@ -18,6 +19,7 @@ export function contentSecurityPolicy(nonce: string): string {
     `style-src 'nonce-${nonce}'`,
     "script-src 'self'",
     "img-src 'self' https://i.scdn.co data:",
+    "font-src 'self'",
     "connect-src 'self'",
     "form-action 'self' https://accounts.spotify.com",
     "frame-ancestors 'none'",
@@ -79,7 +81,7 @@ a:focus-visible{outline:2px solid ${C.green};outline-offset:2px}`;
  */
 export function statusPage(status: number, title: string, message: string): Response {
   const nonce = cspNonce();
-  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title><style nonce="${nonce}">${PAGE_CSS}</style></head>
+  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><style nonce="${nonce}">${PAGE_CSS}</style></head>
 <body><main><h1>${esc(title)}</h1><p>${esc(message)}</p><a href="/">Go to the dashboard</a></main></body></html>`;
   return html(page, { nonce, status });
 }

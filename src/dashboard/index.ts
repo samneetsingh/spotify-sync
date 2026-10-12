@@ -2,7 +2,7 @@
 // /settings, GET /activity and the POST /actions/*. Auth, import and 404s are handled elsewhere
 // (src/index.ts routes in order: Origin check, auth, session, import, dashboard).
 //
-// renderPage and `ui` (src/dashboard/layout.ts) are shared with the auth and import pages. Escaping
+// renderPage and `ui` (src/dashboard/layout.tsx) are shared with the auth and import pages. Escaping
 // rule: arguments named `...Html`/`body` are trusted HTML, everything else is text and gets escaped.
 // Classes only: the CSP blocks `style=` attributes.
 

@@ -1,15 +1,19 @@
 // Page shell and markup helpers for every dashboard page (also used by auth and import pages).
 //
 // Escaping rule: arguments named `...Html` and `body` are trusted HTML; everything else is text and
-// gets escaped. Classes only, never `style=` attributes: the CSP allows the one nonce'd <style>.
+// gets escaped (JSX escapes by default). Classes only, never `style=` attributes: the CSP allows the
+// one nonce'd <style>.
 
+import type { Child } from "hono/jsx";
 import { localTime as alertTime } from "../alerts";
 import type { Session } from "../auth";
 import { esc } from "../email/layout";
 import { cspNonce, html } from "../http";
+import { Notice as NoticeView, PostButton } from "./components/primitives";
+import { raw, render } from "./render";
 import { CSS } from "./styles";
 
-export type NavKey = "home" | "settings" | "activity" | "import";
+export type NavKey = "home" | "manage" | "settings" | "activity" | "import";
 
 export interface Notice {
   /** ok: role=status; error: role=alert; warn: role=status with an amber edge (e.g. settings problems). */
@@ -42,6 +46,7 @@ export interface PageOptions {
 
 const NAV: Array<{ key: NavKey; href: string; label: string }> = [
   { key: "home", href: "/", label: "Home" },
+  { key: "manage", href: "/manage", label: "Manage" },
   { key: "settings", href: "/settings", label: "Settings" },
   { key: "activity", href: "/activity", label: "Activity" },
   { key: "import", href: "/import", label: "Import" },
@@ -125,22 +130,78 @@ export const localTime = alertTime;
 export const whenHtml = (ms: number, now: number, timeZone: string): string =>
   `${esc(ago(ms, now))}<span class="sub">${esc(localTime(ms, timeZone))}</span>`;
 
+// ---------------------------------------------------------------------------- page
+
+/** The shell's options: PageOptions without the body and the HTTP status. */
+export type ShellOptions = Omit<PageOptions, "body" | "status">;
+
+/**
+ * The page shell: skip link, header (brand; with a session also the nav and "Log out"), then <main>
+ * with the notice, the <h1> and the children. `nonce` goes on the one <style>.
+ */
+export function Page(props: ShellOptions & { nonce: string; children?: Child }) {
+  const { title, session, notice } = props;
+  const items = NAV.filter((n) => n.key !== "import" || props.importEnabled !== false);
+  return (
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <meta name="robots" content="noindex" />
+        <meta name="color-scheme" content="dark" />
+        {props.refreshSeconds ? <meta http-equiv="refresh" content={String(Math.max(1, Math.floor(props.refreshSeconds)))} /> : null}
+        <title>{title} · spotify-sync</title>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <style nonce={props.nonce}>{raw(CSS)}</style>
+        {(props.scripts ?? []).map((src) => (
+          <script type="module" src={src}></script>
+        ))}
+      </head>
+      <body>
+        <a class="skip" href="#main">
+          Skip to content
+        </a>
+        <header class={session ? "top" : "top bare"}>
+          <a class="brand" href="/">
+            <span class="mark" aria-hidden="true"></span>spotify-sync
+          </a>
+          {session ? (
+            <>
+              <nav aria-label="Dashboard">
+                <ul>
+                  {items.map((n) => (
+                    <li>
+                      <a href={n.href} aria-current={n.key === props.nav ? "page" : undefined}>
+                        {n.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+              <div class="out">
+                <PostButton action="/logout" label="Log out" small />
+              </div>
+            </>
+          ) : null}
+        </header>
+        <main id="main" class={props.layout === "narrow" ? "narrow" : undefined}>
+          {notice ? <NoticeView {...notice} /> : null}
+          <h1>{title}</h1>
+          {props.children}
+        </main>
+      </body>
+    </html>
+  );
+}
+
 /** A full dashboard page with the security headers and a per-response CSP nonce. */
 export function renderPage(opts: PageOptions): Response {
   const nonce = cspNonce();
-  const refresh = opts.refreshSeconds ? `<meta http-equiv="refresh" content="${Math.max(1, Math.floor(opts.refreshSeconds))}">` : "";
-  const scripts = (opts.scripts ?? []).map((src) => `<script type="module" src="${esc(src)}"></script>`).join("");
-  const items = NAV.filter((n) => n.key !== "import" || opts.importEnabled !== false);
-  const nav = opts.session
-    ? `<nav aria-label="Dashboard"><ul>${items
-        .map((n) => `<li><a href="${n.href}"${n.key === opts.nav ? ' aria-current="page"' : ""}>${n.label}</a></li>`)
-        .join("")}</ul></nav><div class="out">${ui.postButton("/logout", "Log out", { small: true })}</div>`
-    : "";
-  const mainClass = opts.layout === "narrow" ? ` class="narrow"` : "";
-  const page = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark">${refresh}<title>${esc(opts.title)} · spotify-sync</title><style nonce="${nonce}">${CSS}</style>${scripts}</head>
-<body><a class="skip" href="#main">Skip to content</a><header class="top${opts.session ? "" : " bare"}"><a class="brand" href="/"><span class="mark" aria-hidden="true"></span>spotify-sync</a>${nav}</header>
-<main id="main"${mainClass}>${opts.notice ? ui.notice(opts.notice) : ""}<h1>${esc(opts.title)}</h1>
-${opts.body}
-</main></body></html>`;
-  return html(page, { nonce, status: opts.status });
+  const { body, status, ...shell } = opts;
+  const page = render(
+    <Page {...shell} nonce={nonce}>
+      {raw(body)}
+    </Page>,
+  );
+  return html(`<!doctype html>${page}`, { nonce, status });
 }

@@ -23,7 +23,7 @@ describe("html responses", () => {
     expect(res.status).toBe(201);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
     expect(res.headers.get("Content-Security-Policy")).toBe(
-      "default-src 'none'; style-src 'nonce-abc123'; script-src 'self'; img-src 'self' https://i.scdn.co data:; connect-src 'self'; form-action 'self' https://accounts.spotify.com; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'nonce-abc123'; script-src 'self'; img-src 'self' https://i.scdn.co data:; font-src 'self'; connect-src 'self'; form-action 'self' https://accounts.spotify.com; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
@@ -44,6 +44,7 @@ describe("html responses", () => {
     expect(body).toContain(`<style nonce="${nonce}">`);
     expect(body).toContain("&lt;b&gt;Nope&lt;/b&gt;");
     expect(body).toContain("&quot;quoted&quot; &amp; &lt;script&gt;");
+    expect(body).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
     expect(body).not.toMatch(/\sstyle=/);
     expect(notFoundPage().status).toBe(404);
   });
