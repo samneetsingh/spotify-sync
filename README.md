@@ -182,7 +182,8 @@ Each instance uses 4 cron triggers and one Worker; check the [Workers limits](ht
 
 | Page | What's there |
 |---|---|
-| Home | Spotify status and **Sync now**; problems (failing jobs with their last error); emails (next digest, **Send me a preview**, alerts, AI edits used); playlists, with **Recreate** for one you deleted in Spotify; the import; recent activity |
+| Home | Your listening at a glance: song of the week on a spinning record, this week and month so far (with changes against the same point last week and month), top tracks, artists and genres, listening by day (week, month or year), when you listen, your streak and best day, what's new to you, a throwback, the latest and next digests, and quick switches for the main settings. A status chip shows whether syncing is healthy and links to Manage |
+| Manage | Spotify status and **Sync now**; problems (failing jobs with their last error); emails (next digest, **Send me a preview**, alerts, AI edits used); playlists, with **Recreate** for one you deleted in Spotify; the import; recent activity |
 | Settings | Every [setting](#settings) with where its value comes from; **Reconnect Spotify**, **Log out everywhere** |
 | Activity | Recent syncs, jobs, emails, logins and setting changes, and the latest Spotify changes |
 | Import | [History import](#history-import) |
@@ -328,7 +329,7 @@ src/
   runtime.ts          withJob (migrations, settings, alerts, activity, D1 query count), email configs, legacy config import
   settings.ts         the settings registry, precedence, load/save
   auth/               owner, setup link (claim), Spotify login (one OAuth callback), sessions
-  dashboard/          server-rendered pages (landing, home, settings, activity), actions, styles
+  dashboard/          server-rendered TSX pages (landing, home, manage, settings, activity), their data, actions, styles
   import/             history import: upload routes, zip reader, parser, staging, review, apply, Workflow, emails
   http.ts             security headers, CSP nonce, cookies, CSRF (Origin) check
   activity.ts         the dashboard's activity log
