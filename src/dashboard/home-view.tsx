@@ -40,13 +40,13 @@ function busiest<T>(items: T[], plays: (t: T) => number): T | null {
 
 function Hero({ data, empty }: { data: HomeData; empty: boolean }) {
   const song = data.songOfWeek;
+  const notConnected = !data.status.connected;
   const title = (
     <h2 id="hero-title" class="hero-label">
-      Song of the week
+      {!song && notConnected ? "Spotify" : "Song of the week"}
     </h2>
   );
   if (!song) {
-    const notConnected = !data.status.connected;
     const lead = notConnected
       ? "Connect your Spotify account and your listening starts showing up here."
       : empty
@@ -455,7 +455,8 @@ export function HomeView({ data, settings, aiAvailable, writeMode }: HomeViewPro
         <StatusChip status={data.status} now={data.now} />
         {writeMode !== "live" ? <Pill tone="neutral" text={writeMode === "dry_run" ? "Dry run" : "Shadow mode"} /> : null}
       </div>
-      <Banner status={data.status} now={data.now} />
+      {/* Without a song, the hero itself offers "Connect Spotify"; don't say it twice. */}
+      {!data.status.connected && !data.songOfWeek ? null : <Banner status={data.status} now={data.now} />}
       <Hero data={data} empty={empty} />
       {empty ? null : (
         <>

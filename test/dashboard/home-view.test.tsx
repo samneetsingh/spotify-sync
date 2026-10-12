@@ -87,11 +87,19 @@ describe("HomeView", () => {
     expect(out).toContain(`id="settings"`);
   });
 
-  it("not connected: a banner and a hero that both offer to connect Spotify", () => {
+  it("not connected: the hero offers to connect Spotify (once; no banner saying the same)", () => {
     const out = view(FIXTURES["not-connected"]());
     expect(out).toContain(`<a class="chip chip-bad" href="/manage">Not connected</a>`);
-    expect(out).toContain(`<a class="banner-action" href="/login">Connect Spotify</a>`);
     expect(out).toContain(`<a class="btn btn-primary" href="/login">Connect Spotify</a>`);
+    expect(out).not.toContain(`class="banner"`);
+    expect(out.match(/Connect Spotify/g)).toHaveLength(1);
+  });
+
+  it("not connected with plays already saved: the banner offers to connect", () => {
+    const data = fullHome();
+    const out = view({ ...data, status: { ...data.status, connected: false } });
+    expect(out).toContain(`<a class="banner-action" href="/login">Connect Spotify</a>`);
+    expect(out).toContain("Midnight City");
   });
 
   it("a login error: the red banner asks to reconnect", () => {

@@ -217,7 +217,8 @@ ${heat}
 .digest-subject{margin:0 0 2px;font-family:${FONT.display};${ty("title")};font-weight:650;overflow-wrap:anywhere}
 .digest-last .meta{margin:0}
 
-/* Settings widget */
+/* Settings widget (the toggle redirects to /#settings) */
+.home-settings{scroll-margin-top:16px}
 .switch-group{${ty("meta")};font-weight:650;color:${K.mute};margin:16px 0 0}
 .switches{list-style:none;margin:0;padding:0}
 .switches>li{border-bottom:1px solid ${LINE}}
@@ -243,7 +244,7 @@ ${heat}
 .home>.home-streak,.home>.home-tracks,.home>.home-artists,.home>.home-sound,.home>.home-new,.home>.home-throwback,.home>.home-digests,.home>.home-settings{grid-column:span 3}
 .home-sofar{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
 .hero{grid-template-columns:auto minmax(0,1fr);justify-items:start;align-items:center;gap:32px;padding:32px;text-align:left;background:radial-gradient(560px 420px at 18% 40%,rgba(255,180,84,.09),transparent 70%),${PANEL}}
-.vinyl{width:clamp(220px,24vw,340px)}
+.vinyl{width:clamp(220px,26vw,380px)}
 .hero-text,.hero-head,.hero-plays{justify-items:start;justify-content:flex-start}
 .hero-track{${ty("hero")}}
 .range{grid-template-columns:minmax(0,1fr) auto}
