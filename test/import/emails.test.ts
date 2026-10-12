@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, expect, it } from "vitest";
 import { migrate } from "../../src/db/schema";
 import { doneEmail, failedEmail, reviewEmail } from "../../src/import/emails";
-import { importCard } from "../../src/import";
+import { importSection } from "../../src/import";
 import type { Preview } from "../../src/import/store";
 import { resetDb } from "../parity/spotify-fixture";
 import { insertImport } from "./helpers";
@@ -52,11 +52,11 @@ it("escapes the error in the failure email", () => {
 });
 
 it("summarizes the latest import on the home page", async () => {
-  expect(await importCard(env.DB)).toContain("Import history");
+  expect(await importSection(env.DB)).toContain("Import history");
   const id = await insertImport(env.DB, { status: "review", preview: PREVIEW });
-  expect(await importCard(env.DB)).toContain("Ready to review");
+  expect(await importSection(env.DB)).toContain("Ready to review");
   await env.DB.prepare("UPDATE imports SET status = 'applying', progress = 'Imported 2019-03 (month 37 of 127)' WHERE id = ?1").bind(id).run();
-  expect(await importCard(env.DB)).toContain("Imported 2019-03 (month 37 of 127)");
+  expect(await importSection(env.DB)).toContain("Imported 2019-03 (month 37 of 127)");
   await env.DB.prepare("UPDATE imports SET status = 'done' WHERE id = ?1").bind(id).run();
-  expect(await importCard(env.DB)).toContain("Imported Mar 2016 to Sep 2026");
+  expect(await importSection(env.DB)).toContain("Imported Mar 2016 to Sep 2026");
 });

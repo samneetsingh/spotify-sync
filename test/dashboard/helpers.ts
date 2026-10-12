@@ -5,6 +5,7 @@ import { env } from "cloudflare:workers";
 import { expect } from "vitest";
 import type { Session } from "../../src/auth";
 import type { Env } from "../../src/env";
+import type { DashboardStatus } from "../../src/dashboard/status";
 import { resolveSettings, type EffectiveSettings, type SettingValues } from "../../src/settings";
 
 export const ORIGIN = "https://sync.test";
@@ -78,6 +79,7 @@ export function stubSettings(values: Partial<SettingValues> = {}, source: Partia
     digestMonthly: true,
     aiEditor: false,
     timeZone: "America/Los_Angeles",
+    advanced: false,
     ...values,
   };
   const src = Object.fromEntries(Object.keys(all).map((k) => [k, "default"])) as EffectiveSettings["source"];
@@ -115,4 +117,23 @@ export function mockSpotifyArt() {
     throw new Error(`Unexpected fetch in a dashboard test: ${url.href}`);
   }) as typeof fetch;
   return { calls, restore: () => void (globalThis.fetch = original) };
+}
+
+/** A connected instance's live state for the settings page's pure renders: nothing failing, no playlists yet. */
+export function stubStatus(over: Partial<DashboardStatus> = {}): DashboardStatus {
+  return {
+    now: Date.UTC(2026, 9, 11, 19),
+    connected: true,
+    lastRun: null,
+    lastSuccess: null,
+    totalPlays: 0,
+    playsLast7Days: 0,
+    failing: [],
+    lastDigest: { week: null, month: null },
+    aiCalls: 0,
+    aiPaused: false,
+    playlistState: { frequent: null, hindi: null, on_this_day: null, forgotten_favorites: null, holiday: null },
+    artistPlaylists: [],
+    ...over,
+  };
 }

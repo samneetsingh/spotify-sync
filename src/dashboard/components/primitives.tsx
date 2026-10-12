@@ -1,5 +1,5 @@
 // TSX building blocks for dashboard views: Card, Facts, Pill, PostButton, LinkButton, Notice,
-// Rows/Row, Switch and Chip, styled by the shared classes in styles/base.ts. JSX escapes text props;
+// Rows/Row and Chip, styled by the shared classes in styles/base.ts. JSX escapes text props;
 // props typed `Child` take elements, or raw() for HTML that is already escaped.
 
 import type { Child } from "hono/jsx";
@@ -142,42 +142,13 @@ export function Row({ side, actions, children }: RowProps) {
   );
 }
 
-export interface SwitchProps {
-  /** The setting's key, posted as `key` (POST /settings/toggle accepts a fixed allowlist). Not `key`: JSX reserves it. */
-  setting: string;
-  /** The setting's name, e.g. "Weekly digest". */
-  label: string;
-  /** The current state; the form posts the opposite. */
-  on: boolean;
-  disabled?: boolean;
-  /** The id of an element describing the setting (aria-describedby). */
-  describedBy?: string;
-}
-
-/**
- * A settings switch: a one-key POST to /settings/toggle with `key` and `value` (the new state,
- * "true" or "false"). The button shows the label and "On"/"Off"; screen readers get the label as its
- * name and the state from aria-checked, so the visible state word is aria-hidden.
- */
-export function Switch({ setting, label, on, disabled, describedBy }: SwitchProps) {
-  return (
-    <form class="inline" method="post" action="/settings/toggle">
-      <input type="hidden" name="key" value={setting} />
-      <input type="hidden" name="value" value={on ? "false" : "true"} />
-      <button type="submit" class="switch" role="switch" aria-checked={on ? "true" : "false"} aria-describedby={describedBy || undefined} disabled={disabled}>
-        <span class="switch-label">{label}</span> <span class="switch-state" aria-hidden="true">{on ? "On" : "Off"}</span>
-      </button>
-    </form>
-  );
-}
-
 export interface ChipProps {
   tone: Tone;
   text: string;
   href: string;
 }
 
-/** A status chip that links to the details (e.g. Home's status -> /manage). Its text carries the meaning. */
+/** A status chip that links to the details (e.g. Home's status -> /settings). Its text carries the meaning. */
 export function Chip({ tone, text, href }: ChipProps) {
   return (
     <a class={`chip chip-${tone}`} href={href}>

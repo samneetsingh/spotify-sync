@@ -1,6 +1,6 @@
 // Dashboard actions: digest previews (one email through a fake binding, cooldown, recap:* untouched),
 // sync now (concurrency guard, runs through withJob), and recreating a deleted playlist (whitelist).
-// Every action redirects back to /manage with a fixed flash code.
+// Every action redirects back to /settings with a fixed flash code.
 
 import { env } from "cloudflare:workers";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -49,7 +49,7 @@ describe("send me a preview", () => {
 
     const res = await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW);
     expect(res.status).toBe(303);
-    expect(location(res)).toBe("/manage?ok=preview-sent");
+    expect(location(res)).toBe("/settings?ok=preview-sent");
     expect(mail.sent).toHaveLength(1);
     expect(mail.sent[0]!.subject).toMatch(/^\[Preview\] /);
     expect(mail.sent[0]!.to).toBe(live.ALERT_EMAIL_TO);
@@ -66,11 +66,11 @@ describe("send me a preview", () => {
     restore = mockSpotifyArt().restore;
     const live = testEnv({ WRITE_MODE: "live", ALERT_EMAIL: mail.binding });
     await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW);
-    expect(location(await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW + 5 * MIN))).toBe("/manage?error=preview-cooldown");
+    expect(location(await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW + 5 * MIN))).toBe("/settings?error=preview-cooldown");
     expect(mail.sent).toHaveLength(1);
     // The other kind has its own cooldown (no plays last month here, so nothing to send).
-    expect(location(await sendPreview(form({ kind: "month" }), live, stubSettings(), NOW + 5 * MIN))).toBe("/manage?error=preview-empty-month");
-    expect(location(await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW + 11 * MIN))).toBe("/manage?ok=preview-sent");
+    expect(location(await sendPreview(form({ kind: "month" }), live, stubSettings(), NOW + 5 * MIN))).toBe("/settings?error=preview-empty-month");
+    expect(location(await sendPreview(form({ kind: "week" }), live, stubSettings(), NOW + 11 * MIN))).toBe("/settings?ok=preview-sent");
     expect(mail.sent).toHaveLength(2);
   });
 
@@ -79,19 +79,19 @@ describe("send me a preview", () => {
     const mail = fakeBinding();
     restore = mockSpotifyArt().restore;
     const res = await sendPreview(form({ kind: "week" }), testEnv({ WRITE_MODE: "dry_run", ALERT_EMAIL: mail.binding }), stubSettings(), NOW);
-    expect(location(res)).toBe("/manage?ok=preview-logged");
+    expect(location(res)).toBe("/settings?ok=preview-logged");
     expect(mail.sent).toHaveLength(0);
   });
 
   it("says so when the period has no plays", async () => {
     restore = mockSpotifyArt().restore;
     const res = await sendPreview(form({ kind: "week" }), testEnv({ WRITE_MODE: "live", ALERT_EMAIL: fakeBinding().binding }), stubSettings(), NOW);
-    expect(location(res)).toBe("/manage?error=preview-empty-week");
+    expect(location(res)).toBe("/settings?error=preview-empty-week");
   });
 
   it("refuses without email set up in live mode, before the cooldown starts", async () => {
     const res = await sendPreview(form({ kind: "week" }), testEnv({ WRITE_MODE: "live", ALERT_EMAIL: undefined }), stubSettings(), NOW);
-    expect(location(res)).toBe("/manage?error=email-off");
+    expect(location(res)).toBe("/settings?error=email-off");
     expect(await getState(env.DB, "preview:week")).toBeNull();
   });
 
@@ -105,7 +105,7 @@ describe("send me a preview", () => {
     restore = mockSpotifyArt().restore;
     const res = (await handleDashboard(post("/actions/preview", { kind: "month" }), testEnv({ WRITE_MODE: "live", ALERT_EMAIL: mail.binding }), ctx, session))!;
     expect(res.status).toBe(303);
-    expect(location(res)).toMatch(/^\/manage\?(ok|error)=preview-/);
+    expect(location(res)).toMatch(/^\/settings\?(ok|error)=preview-/);
   });
 });
 
@@ -117,7 +117,7 @@ describe("sync now", () => {
     const mock = mockSpotify(spotify);
     restore = mock.restore;
     const res = await syncNow(testEnv());
-    expect(location(res)).toBe("/manage?error=sync-busy");
+    expect(location(res)).toBe("/settings?error=sync-busy");
     expect(mock.calls).toEqual([]);
   });
 
@@ -126,7 +126,7 @@ describe("sync now", () => {
     const mock = mockSpotify(spotify);
     restore = mock.restore;
     const res = await syncNow(testEnv({ ALERT_EMAIL: fakeBinding().binding }));
-    expect(location(res)).toBe("/manage?ok=synced");
+    expect(location(res)).toBe("/settings?ok=synced");
     expect(mock.calls.some((c) => c.op === "recently_played")).toBe(true);
     const runs = await env.DB.prepare("SELECT status FROM sync_runs ORDER BY id").all<{ status: string }>();
     expect(runs.results.map((r) => r.status)).toEqual(["running", "success"]);
@@ -139,7 +139,7 @@ describe("sync now", () => {
     restore = mock.restore;
     const mail = fakeBinding();
     const res = await syncNow(testEnv({ ALERT_EMAIL: mail.binding }));
-    expect(location(res)).toBe("/manage?error=sync-failed");
+    expect(location(res)).toBe("/settings?error=sync-failed");
     expect(await getState(env.DB, "alert_failing:sync")).not.toBeNull();
     const [event] = await recentActivity(env.DB, 1);
     expect(event).toMatchObject({ kind: "job", ok: false, summary: "Sync now failed" });
@@ -150,7 +150,7 @@ describe("recreate a deleted playlist", () => {
   it("forgets an owned playlist that was switched off, so its job creates it again", async () => {
     await env.DB.prepare("INSERT INTO state(key, value) VALUES('playlist:on_this_day', 'off')").run();
     const res = await recreatePlaylist(form({ key: "on_this_day" }), testEnv());
-    expect(location(res)).toBe("/manage?ok=recreate");
+    expect(location(res)).toBe("/settings?ok=recreate");
     expect(await getState(env.DB, "playlist:on_this_day")).toBeNull();
     const [event] = await recentActivity(env.DB, 1);
     expect(event!.summary).toBe("On This Day will be recreated at its next run");
@@ -173,13 +173,13 @@ describe("recreate a deleted playlist", () => {
 });
 
 describe("through the router", () => {
-  it("redirects sync and recreate back to /manage", async () => {
+  it("redirects sync and recreate back to /settings", async () => {
     await env.DB.prepare("INSERT INTO state(key, value) VALUES('playlist:on_this_day', 'off')").run();
     const recreate = (await handleDashboard(post("/actions/playlist/recreate", { key: "on_this_day" }), testEnv(), ctx, session))!;
     expect(recreate.status).toBe(303);
-    expect(location(recreate)).toBe("/manage?ok=recreate");
+    expect(location(recreate)).toBe("/settings?ok=recreate");
     await env.DB.prepare("INSERT INTO sync_runs(started_at, status) VALUES(datetime('now', '-30 seconds'), 'running')").run();
     const sync = (await handleDashboard(post("/actions/sync"), testEnv(), ctx, session))!;
-    expect(location(sync)).toBe("/manage?error=sync-busy");
+    expect(location(sync)).toBe("/settings?error=sync-busy");
   });
 });

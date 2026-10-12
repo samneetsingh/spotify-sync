@@ -1,32 +1,24 @@
-// The new Home ("After hours" design): the page body under the shell's (visually
-// hidden) "Home" heading. Pure rendering from HomeData (./home-data.ts), so it is easy to test and to
-// screenshot. Every widget is a <section> with an <h2>; each has its own empty state, and a quiet
-// period shows zeros rather than a blank chart. Times are in data.timeZone; dates in HomeData are
-// already local ("YYYY-MM-DD").
+// The Home view: the page body under the shell's (visually hidden) "Home" heading. Pure rendering
+// from HomeData (./home-data.ts), so it is easy to test and to screenshot. Every widget is a
+// <section> with an <h2>; each has its own empty state, and a quiet period shows zeros rather than a
+// blank chart. Times are in data.timeZone; dates in HomeData are already local ("YYYY-MM-DD").
 
 import { artistUrl, fmt, trackUrl } from "../email/layout";
 import type { WriteMode } from "../env";
-import type { SettingValues } from "../settings";
 import { formatDate, zonedDate } from "../utils/time";
-import { BarList, ColumnChart, Heatmap, RangeSwitch, SplitBar, StreakDots, type Column } from "./components/charts";
-import { dayLong, dayName, dayShort, hourName, hours, monthLong, monthName, monthShort, playsText, weekdayShort, WEEKDAYS } from "./components/format";
-import { ArtistAvatar, Cover, TrackRow, Vinyl } from "./components/music";
+import { BarList, ChartDefs, Heatmap, LineChart, RangeSwitch, SplitBar, StreakDots, type LinePoint, type LineSeries } from "./components/charts";
+import { dayLong, dayName, dayShort, hourName, hours, monthName, monthShort, playsText, weekdayShort, WEEKDAYS } from "./components/format";
+import { ArtistAvatar, Cover, HeroCover, TrackRow } from "./components/music";
 import { LinkButton, Pill } from "./components/primitives";
-import { SettingsWidget } from "./components/settings-widget";
 import { delta, StatTile } from "./components/stats";
 import { Banner, EmptyState, StatusChip } from "./components/status";
-import { STREAK_DAYS, type DayBar, type HomeData, type MonthBar, type PeriodSoFar } from "./home-data";
-import { ago } from "./layout";
-import { runDay } from "./next-digest";
+import { MONTH_DAYS, STREAK_DAYS, type HomeData, type PeriodSoFar, type Trend } from "./home-data";
 
 /** The cached image for a Spotify id; own keys only, so an id like "constructor" can't pick up Object's members. */
 const artOf = (data: HomeData, id: string): string | undefined => (Object.hasOwn(data.art, id) && data.art[id]) || undefined;
 
 export interface HomeViewProps {
   data: HomeData;
-  settings: SettingValues;
-  /** OPENAI_API_KEY is set: the AI editor switch shows. */
-  aiAvailable: boolean;
   writeMode: WriteMode;
 }
 
@@ -59,7 +51,7 @@ function Hero({ data, empty }: { data: HomeData; empty: boolean }) {
         : "Nothing played this week or last. Play something and it shows up here within 10 minutes.";
     return (
       <section class="card hero is-empty" aria-labelledby="hero-title">
-        <Vinyl />
+        <HeroCover />
         <div class="hero-text">
           {title}
           <p class="hero-track">{notConnected ? "Not connected yet" : "No plays yet"}</p>
@@ -76,7 +68,7 @@ function Hero({ data, empty }: { data: HomeData; empty: boolean }) {
   const t = song.track;
   return (
     <section class="card hero" aria-labelledby="hero-title">
-      <Vinyl cover={artOf(data, t.id)} />
+      <HeroCover cover={artOf(data, t.id)} />
       <div class="hero-text">
         <div class="hero-head">
           {title}
@@ -106,10 +98,10 @@ function SoFar({ id, title, period, vs }: { id: string; title: string; period: P
         <h2 id={`${id}-title`}>{title}</h2>
       </div>
       <dl class="tiles">
-        <StatTile label="Plays" value={fmt(c.plays)} delta={delta(c.plays, p.plays)} />
-        <StatTile label="Hours" value={hours(c.ms)} delta={delta(Math.round(c.ms / 360_000), Math.round(p.ms / 360_000))} />
-        <StatTile label="New tracks" value={fmt(c.newTracks)} delta={delta(c.newTracks, p.newTracks)} />
-        <StatTile label="New artists" value={fmt(c.newArtists)} delta={delta(c.newArtists, p.newArtists)} />
+        <StatTile label="Plays" value={fmt(c.plays)} delta={delta(c.plays, p.plays)} icon="play" />
+        <StatTile label="Hours" value={hours(c.ms)} delta={delta(Math.round(c.ms / 360_000), Math.round(p.ms / 360_000))} icon="clock" />
+        <StatTile label="New tracks" value={fmt(c.newTracks)} delta={delta(c.newTracks, p.newTracks)} icon="music" />
+        <StatTile label="New artists" value={fmt(c.newArtists)} delta={delta(c.newArtists, p.newArtists)} icon="user" />
       </dl>
       <p class="note">Changes compare with the same point {vs}.</p>
     </section>
@@ -118,45 +110,51 @@ function SoFar({ id, title, period, vs }: { id: string; title: string; period: P
 
 // ---------------------------------------------------------------------------- listening by day
 
-function dayColumns(bars: DayBar[], today: string, month: boolean): Column[] {
-  return bars.map((b) => {
-    const day = Number(b.date.slice(8));
-    return {
-      label: month ? String(day) : weekdayShort(b.date),
-      name: dayName(b.date),
-      value: b.plays,
-      highlight: b.date === today,
-      future: b.future,
-      tick: month ? (day - 1) % 7 === 0 : true,
-      note: b.date === today ? "so far" : undefined,
-    };
-  });
-}
-
-function monthColumns(bars: MonthBar[]): Column[] {
-  return bars.map((m, i) => ({
-    label: monthShort(m.month),
-    name: monthLong(m.month),
-    value: m.plays,
-    highlight: m.current,
-    tickWide: (bars.length - 1 - i) % 2 === 1,
-    note: m.current ? "so far" : undefined,
+/** Each year's line with its legend total; this year's says "so far" while its span isn't over. */
+function trendSeries(trend: Trend, soFar: boolean): LineSeries[] {
+  return trend.lines.map((l, k) => ({
+    label: String(l.year),
+    values: l.plays,
+    total: `${playsText(sum(l.plays.map((v) => v ?? 0)))}${k === 0 && soFar ? " so far" : ""}`,
   }));
 }
 
-function daysSummary(prefix: string, bars: DayBar[]): string {
-  const total = sum(bars.map((b) => b.plays));
-  const best = busiest(bars, (b) => b.plays);
-  if (!best) return `${prefix}: no plays yet.`;
-  return `${prefix}: ${playsText(total)} so far, most on ${dayName(best.date)} (${fmt(best.plays)}).`;
+/** "This week so far: 120 plays. The same week in 2025: 210, 2024: 180." */
+function trendSummary(trend: Trend, title: string, soFar: boolean, others: string): string {
+  const [now, ...before] = trend.lines.map((l) => ({ year: l.year, total: sum(l.plays.map((v) => v ?? 0)) }));
+  const head = `${title}${soFar ? " so far" : ""}: ${playsText(now?.total ?? 0)}.`;
+  return before.length ? `${head} ${others} ${before.map((b) => `${b.year}: ${fmt(b.total)}`).join(", ")}.` : head;
 }
 
+/**
+ * Week: every day labelled ("Mon"). The last 30 days: every 7th day back from today labelled with
+ * its day of the month ("20"), plus the month on the first label and the first in a new month
+ * ("Oct 4"). Year: every month ("Oct"), every other one on phones.
+ */
+function weekPoints(dates: string[], today: string): LinePoint[] {
+  return dates.map((d) => ({ label: weekdayShort(d), name: dayName(d), highlight: d === today }));
+}
+
+function recentPoints(dates: string[], today: string): LinePoint[] {
+  let labelledMonth = "";
+  return dates.map((d, i) => {
+    const tick = (dates.length - 1 - i) % 7 === 0;
+    const month = d.slice(0, 7);
+    const label = tick && month !== labelledMonth ? dayShort(d) : String(Number(d.slice(8)));
+    if (tick) labelledMonth = month;
+    return { label, name: dayShort(d), highlight: d === today, tick };
+  });
+}
+
+function yearPoints(months: string[], today: string): LinePoint[] {
+  return months.map((m, i) => ({ label: monthShort(m), name: monthName(m), highlight: m === today.slice(0, 7), tickWide: i % 2 === 1 }));
+}
+
+/** The listening chart's height: it spans the Streak and Throwback cards beside it on wide screens. */
+const CHART_H = 340;
+
 function ListeningByDay({ data, today }: { data: HomeData; today: string }) {
-  const year = data.days.year;
-  const best = busiest(year, (m) => m.plays);
-  const yearSummary = best
-    ? `The last 12 months: ${playsText(sum(year.map((m) => m.plays)))}, most in ${monthLong(best.month)} (${fmt(best.plays)}).`
-    : "The last 12 months: no plays yet.";
+  const { week, month, year } = data.trends;
   return (
     <section class="card home-days" aria-labelledby="days-title">
       <RangeSwitch
@@ -164,13 +162,30 @@ function ListeningByDay({ data, today }: { data: HomeData; today: string }) {
         legend="Show listening by"
         head={<h2 id="days-title">Listening by day</h2>}
         options={[
-          { id: "week", label: "Week", content: <ColumnChart columns={dayColumns(data.days.week, today, false)} summary={daysSummary("This week", data.days.week)} labelHeader="Day" /> },
+          {
+            id: "week",
+            label: "Week",
+            content: <LineChart id="days-week" height={CHART_H} points={weekPoints(week.x, today)} series={trendSeries(week, true)} note="so far" summary={trendSummary(week, "This week", true, "The same week in")} />,
+          },
           {
             id: "month",
             label: "Month",
-            content: <ColumnChart columns={dayColumns(data.days.month, today, true)} summary={daysSummary(`${monthName(today)}`, data.days.month)} labelHeader="Day" />,
+            content: (
+              <LineChart
+                id="days-month"
+                height={CHART_H}
+                points={recentPoints(month.x, today)}
+                series={trendSeries(month, false)}
+                note="so far"
+                summary={trendSummary(month, `The last ${MONTH_DAYS} days`, false, "The same dates in")}
+              />
+            ),
           },
-          { id: "year", label: "Year", content: <ColumnChart columns={monthColumns(year)} summary={yearSummary} labelHeader="Month" /> },
+          {
+            id: "year",
+            label: "Year",
+            content: <LineChart id="days-year" height={CHART_H} points={yearPoints(year.x, today)} series={trendSeries(year, true)} note="so far" summary={trendSummary(year, String(year.lines[0]?.year ?? ""), true, "The years before:")} />,
+          },
         ]}
       />
     </section>
@@ -395,65 +410,16 @@ function Throwback({ data, month }: { data: HomeData; month: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------- emails
-
-function Digests({ data, settings, writeMode }: { data: HomeData; settings: SettingValues; writeMode: WriteMode }) {
-  const tz = data.timeZone;
-  const { last, next } = data.digests;
-  const nextRow = (on: boolean, n: { at: number; period: string } | null) =>
-    !on ? (
-      <span class="muted">Off</span>
-    ) : n ? (
-      <>
-        {runDay(n.at, tz)}
-        <span class="sub">Covers {n.period}</span>
-      </>
-    ) : (
-      <span class="muted">Not scheduled</span>
-    );
-  const firstNext = [settings.digestWeekly ? next.week : null, settings.digestMonthly ? next.month : null]
-    .filter((n): n is { at: number; period: string } => !!n)
-    .sort((a, b) => a.at - b.at)[0];
-  return (
-    <section class="card home-digests" id="emails" aria-labelledby="emails-title">
-      <div class="card-head">
-        <h2 id="emails-title">Emails</h2>
-      </div>
-      <h3 class="sub-title">Latest</h3>
-      {last ? (
-        <div class="digest-last">
-          <p class="digest-subject">{last.subject}</p>
-          <p class="meta">
-            {last.kind === "week" ? "Weekly digest" : "Monthly recap"} for {last.period}, sent {runDay(last.sentAt, tz)} ({ago(last.sentAt, data.now)})
-          </p>
-        </div>
-      ) : (
-        <p class="soft">{firstNext ? `The latest digest shows up here after the next send, ${runDay(firstNext.at, tz)}.` : "The latest digest shows up here once one is sent."}</p>
-      )}
-      <h3 class="sub-title">Next</h3>
-      <dl class="facts">
-        <dt>Weekly digest</dt>
-        <dd>{nextRow(settings.digestWeekly, next.week)}</dd>
-        <dt>Monthly recap</dt>
-        <dd>{nextRow(settings.digestMonthly, next.month)}</dd>
-      </dl>
-      {writeMode !== "live" ? <p class="note">Dry run: digests are written to the Worker log instead of being sent.</p> : null}
-      <div class="card-foot">
-        <a href="/manage#emails">Send a preview</a>
-      </div>
-    </section>
-  );
-}
-
 // ---------------------------------------------------------------------------- page
 
-/** Home's body: status, the hero, this week and month, charts, lists, emails and settings. */
-export function HomeView({ data, settings, aiAvailable, writeMode }: HomeViewProps) {
+/** Home's body: status, the hero, this week and month, charts and lists. */
+export function HomeView({ data, writeMode }: HomeViewProps) {
   const today = formatDate(zonedDate(data.now, data.timeZone));
   const month = monthName(today);
-  const empty = data.days.year.every((m) => m.plays === 0) && !data.songOfWeek;
+  const empty = !data.anyPlays && !data.songOfWeek;
   return (
     <div class={`home${empty ? " is-new" : ""}`}>
+      <ChartDefs />
       <div class="home-status">
         <StatusChip status={data.status} now={data.now} />
         {writeMode !== "live" ? <Pill tone="neutral" text={writeMode === "dry_run" ? "Dry run" : "Shadow mode"} /> : null}
@@ -469,16 +435,14 @@ export function HomeView({ data, settings, aiAvailable, writeMode }: HomeViewPro
           </div>
           <ListeningByDay data={data} today={today} />
           <Streak data={data} today={today} />
+          <Throwback data={data} month={month} />
           <TopTracks data={data} month={month} />
           <TopArtists data={data} month={month} />
           <YourSound data={data} month={month} />
           <WhenYouListen data={data} />
           <NewToYou data={data} month={month} />
-          <Throwback data={data} month={month} />
         </>
       )}
-      <Digests data={data} settings={settings} writeMode={writeMode} />
-      <SettingsWidget settings={settings} aiAvailable={aiAvailable} />
     </div>
   );
 }

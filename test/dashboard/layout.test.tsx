@@ -1,5 +1,6 @@
-// The TSX page shell (layout.tsx): favicon, the Manage nav item, the head order, and the trusted
-// body. Escaping, nonces and Import hiding are covered in pages.test.ts through renderPage.
+// The TSX page shell (layout.tsx): favicon, the nav (Activity only with showActivity), the head
+// order, the sidebar hook, and the trusted body. Escaping and nonces are covered in pages.test.ts
+// through renderPage.
 
 import { describe, expect, it } from "vitest";
 import { Page, renderPage } from "../../src/dashboard/layout";
@@ -15,16 +16,25 @@ describe("page shell", () => {
     );
   });
 
-  it("lists Manage between Home and Settings, and marks it current", () => {
-    const out = render(
-      <Page title="Manage" session={session} nav="manage" nonce="n">
-        {raw("<p>x</p>")}
-      </Page>,
-    );
-    const labels = [...out.matchAll(/<li><a href="([^"]+)"[^>]*>([^<]+)<\/a><\/li>/g)].map((m) => `${m[2]} ${m[1]}`);
-    expect(labels).toEqual(["Home /", "Manage /manage", "Settings /settings", "Activity /activity", "Import /import"]);
-    expect(out).toContain(`<a href="/manage" aria-current="page">Manage</a>`);
-    expect(out).toContain(`<form class="inline" method="post" action="/logout"><button type="submit" class="btn btn-secondary btn-small">Log out</button></form>`);
+  it("lists Home and Settings, Activity only with showActivity, and marks the current one", () => {
+    const page = (showActivity?: boolean) =>
+      render(
+        <Page title="Settings" session={session} nav="settings" nonce="n" showActivity={showActivity}>
+          {raw("<p>x</p>")}
+        </Page>,
+      );
+    const labels = (out: string) => [...out.matchAll(/<li><a href="([^"]+)"[^>]*>([^<]+)<\/a><\/li>/g)].map((m) => `${m[2]} ${m[1]}`);
+    const out = page();
+    expect(labels(out)).toEqual(["Home /", "Settings /settings"]);
+    expect(labels(page(true))).toEqual(["Home /", "Settings /settings", "Activity /activity"]);
+    expect(out).toContain(`<a href="/settings" aria-current="page">Settings</a>`);
+    expect(out).toContain(`<body class="with-nav">`);
+    expect(out).not.toContain(`action="/logout"`); // Log out is in Settings (the Account card)
+  });
+
+  it("loads no web fonts", async () => {
+    const body = await expectSafePage(renderPage({ title: "Home", session, body: "" }));
+    expect(body).not.toMatch(/rel="preload"|@font-face|\.woff2/);
   });
 
   it("puts the notice and the h1 before the trusted body, without a nav for visitors", () => {
@@ -33,6 +43,7 @@ describe("page shell", () => {
         {raw("<p>body</p>")}
       </Page>,
     );
+    expect(out).toContain(`<body><a class="skip" href="#main">`);
     expect(out).toContain(`<header class="top bare"><a class="brand" href="/"><span class="mark" aria-hidden="true"></span>spotify-sync</a></header>`);
     expect(out).toContain(`<main id="main" class="narrow"><div class="notice notice-error" role="alert">Nope</div><h1>Almost ready</h1><p>body</p></main>`);
     expect(out).not.toContain("<nav");

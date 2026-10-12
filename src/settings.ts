@@ -32,9 +32,10 @@ export interface SettingValues {
   digestMonthly: boolean;
   aiEditor: boolean;
   timeZone: string;
+  advanced: boolean;
 }
 
-/** "alerts" | "digestWeekly" | "digestMonthly" | "aiEditor" | "liked" | "frequent" | "frequentMinPlays" | "artistPlaylists" | "hindiFavorites" | "onThisDay" | "forgottenFavorites" | "holiday" | "timeZone" */
+/** "alerts" | "digestWeekly" | "digestMonthly" | "aiEditor" | "liked" | "frequent" | "frequentMinPlays" | "artistPlaylists" | "hindiFavorites" | "onThisDay" | "forgottenFavorites" | "holiday" | "timeZone" | "advanced" */
 export type SettingKey = keyof SettingValues;
 export type SettingType = "boolean" | "integer" | "timeZone";
 export type SettingGroup = "Playlists" | "Emails" | "General";
@@ -57,6 +58,8 @@ export interface SettingDef<K extends SettingKey = SettingKey> {
   fromEnv?: (env: Env) => unknown;
   /** Shown on the settings page; default: shown. */
   visible?: (env: Env) => boolean;
+  /** Shown on the settings page only while the `advanced` setting is on (its value applies either way). */
+  advancedOnly?: true;
   /** A value that overrides every layer (e.g. aiEditor is false without an OpenAI key). */
   force?: (env: Env) => SettingValues[K] | undefined;
 }
@@ -77,16 +80,11 @@ export const confirmField = (key: SettingKey): string => `confirm_${key}`;
 export const LIKED_SONGS_WARNING =
   "Adds every track you play to your Liked Songs. Songs you already liked are untouched. Turning this off later doesn't remove the songs it added.";
 
+/**
+ * Display order, per group: the settings changed most often and least risky first; the ones that
+ * reach into the owner's library or hide problems (Liked Songs, problem alerts) last.
+ */
 const REGISTRY: { [K in SettingKey]: SettingDef<K> } = {
-  liked: {
-    key: "liked",
-    type: "boolean",
-    group: "Playlists",
-    label: "Add played songs to Liked Songs",
-    description: "Every track you play is added to your Liked Songs.",
-    default: false,
-    confirmOn: LIKED_SONGS_WARNING,
-  },
   frequent: {
     key: "frequent",
     type: "boolean",
@@ -105,23 +103,6 @@ const REGISTRY: { [K in SettingKey]: SettingDef<K> } = {
     min: 2,
     max: 100,
     fromEnv: (env) => env.FREQUENT_MIN_PLAYS || undefined,
-  },
-  artistPlaylists: {
-    key: "artistPlaylists",
-    type: "boolean",
-    group: "Playlists",
-    label: "Artist playlists",
-    description: "A playlist for each artist you listen to a lot, updated every night.",
-    default: true,
-  },
-  hindiFavorites: {
-    key: "hindiFavorites",
-    type: "boolean",
-    group: "Playlists",
-    label: "Hindi Favorites",
-    description: "Your most-played Hindi and Desi songs (by artist genre), updated every night.",
-    default: false,
-    fromEnv: (env) => (env.SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID ? true : undefined),
   },
   onThisDay: {
     key: "onThisDay",
@@ -147,13 +128,31 @@ const REGISTRY: { [K in SettingKey]: SettingDef<K> } = {
     description: "The holiday songs you play, collected in season (October to January 6).",
     default: true,
   },
-  alerts: {
-    key: "alerts",
+  artistPlaylists: {
+    key: "artistPlaylists",
     type: "boolean",
-    group: "Emails",
-    label: "Problem alerts",
-    description: "An email when a job fails, a reminder while it keeps failing, and a note when it recovers.",
+    group: "Playlists",
+    label: "Artist playlists",
+    description: "A playlist for each artist you listen to a lot, updated every night.",
     default: true,
+  },
+  hindiFavorites: {
+    key: "hindiFavorites",
+    type: "boolean",
+    group: "Playlists",
+    label: "Hindi Favorites",
+    description: "Your most-played Hindi and Desi songs (by artist genre), updated every night.",
+    default: false,
+    fromEnv: (env) => (env.SPOTIFY_HINDI_FAVORITES_PLAYLIST_ID ? true : undefined),
+  },
+  liked: {
+    key: "liked",
+    type: "boolean",
+    group: "Playlists",
+    label: "Add played songs to Liked Songs",
+    description: "Every track you play is added to your Liked Songs.",
+    default: false,
+    confirmOn: LIKED_SONGS_WARNING,
   },
   digestWeekly: {
     key: "digestWeekly",
@@ -182,6 +181,23 @@ const REGISTRY: { [K in SettingKey]: SettingDef<K> } = {
     visible: (env) => !!env.OPENAI_API_KEY,
     force: (env) => (env.OPENAI_API_KEY ? undefined : false),
   },
+  alerts: {
+    key: "alerts",
+    type: "boolean",
+    group: "Emails",
+    label: "Problem alerts",
+    description: "An email when a job fails, a reminder while it keeps failing, and a note when it recovers.",
+    default: true,
+    advancedOnly: true,
+  },
+  advanced: {
+    key: "advanced",
+    type: "boolean",
+    group: "General",
+    label: "Advanced",
+    description: "Shows the Activity page, problem alerts, the time zone and account controls (reconnect, log out).",
+    default: false,
+  },
   timeZone: {
     key: "timeZone",
     type: "timeZone",
@@ -190,6 +206,7 @@ const REGISTRY: { [K in SettingKey]: SettingDef<K> } = {
     description: "Decides when your day and week start: history playlists, the holiday season, digests and the times in emails.",
     default: "UTC",
     fromEnv: (env) => env.TIME_ZONE || undefined,
+    advancedOnly: true,
   },
 };
 

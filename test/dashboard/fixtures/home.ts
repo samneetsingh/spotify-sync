@@ -1,10 +1,10 @@
 // Realistic HomeData for the Home view's tests and screenshots: a full instance, a brand-new one, one
 // that isn't connected, one whose Spotify login expired, a quiet week, and missing art or artist
-// details. "Now" is Thursday, Oct 8 2026, 3:30 PM in Los Angeles; the day bars come from the same
-// helpers loadHome uses, so their shapes match the real thing.
+// details. "Now" is Thursday, Oct 8 2026, 3:30 PM in Los Angeles; this week's days and the listening
+// lines come from the same helpers loadHome uses, so their shapes match the real thing.
 
-import { dayBars, localDays, monthBars, monthDates, weekDates, type DayCount, type HomeData, type TrackItem } from "../../../src/dashboard/home-data";
-import { addDays, addMonths, formatDate, zonedDate } from "../../../src/utils/time";
+import { dayBars, localDays, trendLines, trendSpans, TREND_YEARS, weekDates, type DayCount, type HomeData, type TrackItem } from "../../../src/dashboard/home-data";
+import { addDays, formatDate, zonedDate, type LocalDate } from "../../../src/utils/time";
 
 export const TZ = "America/Los_Angeles";
 export const NOW = Date.parse("2026-10-08T22:30:00Z");
@@ -42,10 +42,10 @@ const ART: Record<string, string> = Object.fromEntries(
   [...TRACKS.slice(0, 4), ...ARTISTS.slice(0, 4), { id: "throwback-1" }, { id: "newartist-1" }].map((x, i) => [x.id, `https://i.scdn.co/image/ab67616d0000b273${String(i).padStart(24, "0")}`]),
 );
 
-/** Plays per local day for the 12 months loadHome reads, ending today (today partial). */
+/** Plays per local day since Jan 1 of the earliest year the listening lines show, ending today (today partial). */
 function daily(seed: number, quietFrom?: string): DayCount[] {
   const r = rng(seed);
-  return localDays(addMonths(today, -11), today).map((date) => {
+  return localDays({ year: today.year - (TREND_YEARS - 1), month: 1, day: 1 }, today).map((date) => {
     const key = formatDate(date);
     const weekend = [0, 6].includes(new Date(Date.UTC(date.year, date.month - 1, date.day)).getUTCDay());
     const season = 1 + 0.35 * Math.sin((date.month / 12) * Math.PI * 2);
@@ -72,8 +72,17 @@ function hourGrid(seed: number, scale = 1): number[][] {
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
-function withDays(days: DayCount[]): Pick<HomeData, "days"> {
-  return { days: { week: dayBars(days, weekDates(today), today), month: dayBars(days, monthDates(today), today), year: monthBars(days, today) } };
+/** This week's days and the listening lines (each span summed from `days`), as loadHome builds them. */
+function withDays(days: DayCount[]): Pick<HomeData, "days" | "trends" | "anyPlays"> {
+  const plays = new Map(days.map((d) => [formatDate(d.date), d.plays]));
+  const count = ([from, to]: [LocalDate, LocalDate]) => sum(localDays(from, addDays(to, -1)).map((d) => plays.get(formatDate(d)) ?? 0));
+  const spans = trendSpans(today);
+  const trend = (c: (typeof spans)["week"]) => ({ x: c.x, lines: trendLines(c.spans, c.spans.flat().map(count), today) });
+  return {
+    days: { week: dayBars(days, weekDates(today), today) },
+    trends: { week: trend(spans.week), month: trend(spans.month), year: trend(spans.year) },
+    anyPlays: days.some((d) => d.plays > 0),
+  };
 }
 
 const syncRun = (id: number, minutesAgo: number) => ({
@@ -86,17 +95,12 @@ const syncRun = (id: number, minutesAgo: number) => ({
   error: null,
 });
 
-const NEXT = {
-  week: { at: Date.parse("2026-10-12T08:05:00Z"), period: "Oct 5–11" },
-  month: { at: Date.parse("2026-11-01T08:05:00Z"), period: "October 2026" },
-};
-
 /** Everything present: a busy instance with art. */
 export function fullHome(): HomeData {
   const days = daily(7);
   const bars = withDays(days);
   const weekPlays = sum(bars.days.week.map((b) => b.plays));
-  const monthPlays = sum(bars.days.month.map((b) => b.plays));
+  const monthPlays = sum(days.filter((d) => d.date.year === today.year && d.date.month === today.month).map((d) => d.plays));
   return {
     now: NOW,
     timeZone: TZ,
@@ -139,10 +143,6 @@ export function fullHome(): HomeData {
       { year: 2025, track: { id: "throwback-1", name: "Tum Hi Ho", artists: "Arijit Singh", plays: 31 } },
       { year: 2021, track: { id: "throwback-5", name: "Levitating", artists: "Dua Lipa", plays: 24 } },
     ],
-    digests: {
-      last: { kind: "week", subject: "Your week: 284 plays, led by “Blinding Lights”", period: "Sep 28 – Oct 4", sentAt: Date.parse("2026-10-05T08:05:12Z") },
-      next: NEXT,
-    },
     art: ART,
   };
 }
@@ -167,7 +167,6 @@ export function emptyHome(): HomeData {
     hours: { from: formatDate(addDays(today, -27)), to: formatDate(today), grid: Array.from({ length: 7 }, () => Array<number>(24).fill(0)) },
     newToYou: { plays: 0, repeatPlays: 0, newTracks: 0, newArtists: [] },
     throwbacks: [],
-    digests: { last: null, next: NEXT },
     art: {},
   };
 }

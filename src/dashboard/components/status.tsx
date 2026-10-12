@@ -1,12 +1,12 @@
-// Home's status: the Spotify sync chip (links to Manage), the slim red banner for problems, and the
-// empty state. The connection's tone and wording come from syncState (shared with Manage).
+// Home's status: the Spotify sync chip (links to Settings), the slim red banner for problems, and
+// the empty state. The connection's tone and wording come from syncState (shared with Settings).
 
 import type { Child } from "hono/jsx";
 import { jobLabel } from "../../runtime";
 import type { HomeStatus } from "../home-data";
 import { ago } from "../layout";
 import { syncState } from "../sync-state";
-import { MiniVinyl } from "./music";
+import { Icon } from "./icons";
 import { Chip } from "./primitives";
 
 /** The chip's text: the state, plus how long ago the last sync finished when that helps. */
@@ -18,9 +18,9 @@ export function statusText(status: HomeStatus, now: number): string {
   return s.tone === "ok" ? `${s.label}, synced ${ago(at, now)}` : `${s.label}, last synced ${ago(at, now)}`;
 }
 
-/** The Spotify sync status as a chip linking to /manage (its text carries the meaning). */
+/** The Spotify sync status as a chip linking to the Spotify card in Settings (its text carries the meaning). */
 export function StatusChip({ status, now }: { status: HomeStatus; now: number }) {
-  return <Chip tone={syncState(status, now).tone} text={statusText(status, now)} href="/manage" />;
+  return <Chip tone={syncState(status, now).tone} text={statusText(status, now)} href="/settings#spotify" />;
 }
 
 /**
@@ -40,10 +40,10 @@ export function Banner({ status, now }: { status: HomeStatus; now: number }) {
     action = { href: "/login", label: "Reconnect Spotify" };
   } else if (status.failing.some((f) => f.job === "sync")) {
     text = `${s.lead.replace(" The details are under Problems.", "")}${others.length ? ` ${failingSentence(others.map((f) => f.job))}` : ""}`;
-    action = { href: "/manage#problems", label: "See problems" };
+    action = { href: "/settings#problems", label: "See problems" };
   } else if (others.length) {
     text = failingSentence(others.map((f) => f.job));
-    action = { href: "/manage#problems", label: "See problems" };
+    action = { href: "/settings#problems", label: "See problems" };
   } else {
     return null;
   }
@@ -75,11 +75,13 @@ export interface EmptyStateProps {
   action?: Child;
 }
 
-/** An empty widget: a small record, what's missing and what happens next. */
+/** An empty widget: a music-note icon square, what's missing and what happens next. */
 export function EmptyState({ title, children, action }: EmptyStateProps) {
   return (
     <div class="empty">
-      <MiniVinyl class="mini-vinyl empty-icon" />
+      <span class="empty-icon" aria-hidden="true">
+        <Icon name="music" />
+      </span>
       <p class="empty-title">{title}</p>
       {children ? <p class="empty-text">{children}</p> : null}
       {action ? <div class="empty-action">{action}</div> : null}

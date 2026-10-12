@@ -7,7 +7,7 @@ import type { Session } from "../../src/auth";
 import { migrate } from "../../src/db/schema";
 import { esc } from "../../src/email/layout";
 import type { Env } from "../../src/env";
-import { handleImportRoutes, importCard } from "../../src/import";
+import { handleImportRoutes, importSection } from "../../src/import";
 import { LIMITS, PART_SIZE } from "../../src/import/limits";
 import { getImport, type Preview } from "../../src/import/store";
 import { LIKED_SONGS_WARNING } from "../../src/settings";
@@ -65,6 +65,12 @@ describe("access", () => {
   it("ignores other paths", async () => {
     expect(await handleImportRoutes(req("/settings"), testEnv(), ctx, session)).toBeNull();
     expect(await handleImportRoutes(req("/imports"), testEnv(), ctx, session)).toBeNull();
+  });
+
+  it("shows the import page under Settings (there's no Import nav item)", async () => {
+    const page = await (await call("/import")).text();
+    expect(page).toMatch(/<a href="\/settings" aria-current="page">(?:(?!<\/a>)[\s\S])*Settings<\/a>/);
+    expect(page).not.toContain(`<a href="/import"`);
   });
 
   it("sends anonymous visitors to the login and refuses their POSTs", async () => {
@@ -209,8 +215,8 @@ describe("finished import", () => {
     const html = await (await call("/import")).text();
     expect(html).toContain("Last import");
     expect(html).toContain("Oct 11, 2026, 3:15 PM PDT");
-    expect(await importCard(db, "America/Los_Angeles")).toContain("Oct 11, 2026, 3:15 PM PDT");
-    expect(await importCard(db)).toContain("Oct 11, 2026, 10:15 PM UTC");
+    expect(await importSection(db, "America/Los_Angeles")).toContain("Oct 11, 2026, 3:15 PM PDT");
+    expect(await importSection(db)).toContain("Oct 11, 2026, 10:15 PM UTC");
   });
 });
 

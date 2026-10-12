@@ -1,5 +1,6 @@
-// The dashboard router and pages: landing variants, auth gating, CSP/escaping, methods. Manage is in
-// manage.test.tsx, the settings toggle in toggle.test.ts.
+// The dashboard router and pages: landing variants, auth gating, CSP/escaping, methods, and the
+// Activity page behind the Advanced setting. The settings page's status parts are in
+// settings-status.test.tsx.
 
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -62,13 +63,13 @@ describe("landing page (no session)", () => {
 });
 
 describe("owner pages without a session", () => {
-  it.each(["/manage", "/settings", "/activity"])("GET %s redirects to the login and back", async (path) => {
+  it.each(["/settings", "/activity"])("GET %s redirects to the login and back", async (path) => {
     const res = (await handleDashboard(get(`${path}?welcome=1`), testEnv(), ctx, null))!;
     expect(res.status).toBe(303);
     expect(res.headers.get("Location")).toBe(`/login?next=${encodeURIComponent(`${path}?welcome=1`)}`);
   });
 
-  it.each(["/settings", "/settings/toggle", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"])("POST %s is refused with 401 and changes nothing", async (path) => {
+  it.each(["/settings", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"])("POST %s is refused with 401 and changes nothing", async (path) => {
     const res = (await handleDashboard(post(path, { kind: "week", key: "digestWeekly", value: "false", digestWeekly: "false" }), testEnv(), ctx, null))!;
     expect(res.status).toBe(401);
     const runs = await env.DB.prepare("SELECT COUNT(*) AS n FROM sync_runs").first<{ n: number }>();
@@ -80,7 +81,7 @@ describe("owner pages without a session", () => {
 
 describe("routing", () => {
   it("ignores paths it doesn't own", async () => {
-    for (const path of ["/nope", "/import", "/login", "/actions/unknown", "/settings/x", "/manage/x", "/home"]) {
+    for (const path of ["/nope", "/import", "/login", "/actions/unknown", "/settings/x", "/manage", "/home"]) {
       expect(await handleDashboard(get(path), testEnv(), ctx, session)).toBeNull();
     }
   });
@@ -94,24 +95,21 @@ describe("routing", () => {
     expect(postHome.headers.get("Allow")).toBe("GET, HEAD");
     const del = (await handleDashboard(new Request(`${ORIGIN}/settings`, { method: "DELETE" }), testEnv(), ctx, session))!;
     expect(del.headers.get("Allow")).toBe("GET, HEAD, POST");
-    const getToggle = (await handleDashboard(get("/settings/toggle?key=digestWeekly&value=false"), testEnv(), ctx, session))!;
-    expect(getToggle.status).toBe(405);
-    expect(getToggle.headers.get("Allow")).toBe("POST");
     expect(await env.DB.prepare("SELECT COUNT(*) AS n FROM settings").first<{ n: number }>()).toEqual({ n: 0 });
-    const postManage = (await handleDashboard(post("/manage"), testEnv(), ctx, session))!;
-    expect(postManage.status).toBe(405);
-    expect(postManage.headers.get("Allow")).toBe("GET, HEAD");
+    const postActivity = (await handleDashboard(post("/activity"), testEnv(), ctx, session))!;
+    expect(postActivity.status).toBe(405);
+    expect(postActivity.headers.get("Allow")).toBe("GET, HEAD");
   });
 });
 
 describe("renderPage", () => {
-  it("escapes the title, marks the current nav item and hides Import when asked", async () => {
-    const res = renderPage({ title: XSS, session, nav: "activity", body: "<p>ok</p>", importEnabled: false });
+  it("escapes the title, marks the current nav item, and has no Import item (it lives in Settings)", async () => {
+    const res = renderPage({ title: XSS, session, nav: "activity", body: "<p>ok</p>", showActivity: true });
     const body = await expectSafePage(res);
     expect(body).toContain(`<h1>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;</h1>`);
-    expect(body).toContain(`<a href="/activity" aria-current="page">Activity</a>`);
+    expect(body).toMatch(/<a href="\/activity" aria-current="page">(?:(?!<\/a>)[\s\S])*Activity<\/a>/);
     expect(body).not.toContain('href="/import"');
-    expect(body).toMatch(/<form class="inline" method="post" action="\/logout">/);
+    expect(body).not.toContain(`action="/logout"`); // in Settings, not the shell
     expect(renderPage({ title: "x", session, body: "" }).headers.get("Content-Type")).toBe("text/html; charset=utf-8");
   });
 
@@ -122,19 +120,19 @@ describe("renderPage", () => {
 });
 
 describe("home page", () => {
-  it("renders the new Home with the flash, the status chip and the settings widget; no Spotify call without art to fetch", async () => {
+  it("renders the new Home with the flash and the status chip; no Spotify call without art to fetch", async () => {
     const original = globalThis.fetch;
     globalThis.fetch = (() => Promise.reject(new Error("unexpected fetch"))) as typeof fetch;
     try {
       const res = (await handleDashboard(get("/?ok=saved"), testEnv(), ctx, session))!;
       expect(res.status).toBe(200);
       const body = await expectSafePage(res);
-      expect(body).toContain('aria-current="page">Home');
+      expect(body).toMatch(/aria-current="page">(?:(?!<\/a>)[\s\S])*Home<\/a>/);
       expect(body).toContain("<h1>Home</h1>");
       expect(body).toContain(`role="status">Settings saved.`);
-      expect(body).toContain('id="settings"');
-      expect(body).toContain('action="/settings/toggle"');
-      expect(body).toContain('href="/manage"');
+      expect(body).not.toContain('id="settings"');
+      expect(body).toContain('href="/settings"');
+      expect(body).not.toContain('<a href="/activity"');
     } finally {
       globalThis.fetch = original;
     }
@@ -147,14 +145,29 @@ describe.skipIf(!settingsReady)("[integration: WP-B settings] every page", () =>
       env.DB.prepare("INSERT INTO activity(at, kind, ok, summary, detail) VALUES(?1, 'job', 0, ?2, ?2)").bind(NOW, XSS),
       env.DB.prepare("INSERT INTO sync_runs(started_at, finished_at, status, plays_fetched, error) VALUES(datetime('now'), datetime('now'), 'fail', 0, ?1)").bind(XSS),
       env.DB.prepare("INSERT INTO playlists(playlist_id, name, artist_name, playlist_type) VALUES('pl1', ?1, ?1, 'artist')").bind(XSS),
+      env.DB.prepare("INSERT INTO settings(key, value, updated_at) VALUES('advanced', 'true', datetime('now'))"), // the Activity page
     ]);
     const evil = { ...session, displayName: XSS };
-    for (const path of ["/", "/manage", "/settings?welcome=1", "/activity"]) {
+    for (const path of ["/", "/settings?welcome=1", "/activity"]) {
       const res = (await handleDashboard(get(path), testEnv(), ctx, evil))!;
       expect(res.status).toBe(200);
       const body = await expectSafePage(res);
       expect(body).not.toContain("<script>alert");
     }
+  });
+
+  it("shows the Activity page and its nav item only with the Advanced setting on", async () => {
+    const e = testEnv({ SETTINGS: "{}" });
+    const off = (await handleDashboard(get("/activity"), e, ctx, session))!;
+    expect(off.status).toBe(303);
+    expect(off.headers.get("Location")).toBe("/settings#s-advanced");
+    expect(await (await handleDashboard(get("/settings"), e, ctx, session))!.text()).not.toContain('<a href="/activity"');
+
+    await env.DB.prepare("INSERT INTO settings(key, value, updated_at) VALUES('advanced', 'true', datetime('now'))").run();
+    const on = (await handleDashboard(get("/activity"), e, ctx, session))!;
+    expect(on.status).toBe(200);
+    expect(await on.text()).toMatch(/<a href="\/activity" aria-current="page">(?:(?!<\/a>)[\s\S])*Activity<\/a>/);
+    for (const path of ["/", "/settings"]) expect(await (await handleDashboard(get(path), e, ctx, session))!.text()).toMatch(/<a href="\/activity">(?:(?!<\/a>)[\s\S])*Activity<\/a>/);
   });
 
   it("renders every landing state without style= attributes", async () => {

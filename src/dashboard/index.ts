@@ -1,5 +1,5 @@
-// The owner dashboard: GET / (landing or home), GET /manage, GET/POST /settings, POST
-// /settings/toggle, GET /activity and the POST /actions/*. Auth, import and 404s are handled
+// The owner dashboard: GET / (landing or home), GET/POST /settings, GET /activity (with the
+// `advanced` setting on) and the POST /actions/*. Auth, import and 404s are handled
 // elsewhere (src/index.ts routes in order: Origin check, auth, session, import, dashboard).
 //
 // renderPage (src/dashboard/layout.tsx) is shared with the auth and import pages. Escaping
@@ -10,24 +10,23 @@ import type { Session } from "../auth";
 import type { Env } from "../env";
 import { parseWriteMode } from "../env";
 import { authRequired, redirect303, statusPage } from "../http";
-import { importCard } from "../import";
+import { importSection } from "../import";
 import { emailConfig } from "../runtime";
-import { isSettingKey, loadSettings, saveSettings, settingDef, type SettingKey } from "../settings";
+import { loadSettings, saveSettings } from "../settings";
 import { activityBody, loadActivity } from "./activity";
 import { fillArt } from "./art";
 import { loadHome } from "./home-data";
 import { HomeView } from "./home-view";
 import { PREVIEW_COOLDOWN_MS, recreatePlaylist, sendPreview, syncNow } from "./actions";
 import { renderLanding } from "./landing";
-import { renderPage, type Notice } from "./layout";
-import { manageBody } from "./manage";
+import { renderPage, type Notice, type PageOptions } from "./layout";
 import { render } from "./render";
-import { settingsBody } from "./settings";
+import { settingsBody, type SettingsView } from "./settings";
 import { loadStatus } from "./status";
 
 export { ago, localTime, renderPage, type ButtonVariant, type NavKey, type Notice, type PageOptions, type Tone } from "./layout";
 
-/** Whether the import bindings exist (the Import nav item and card are hidden without them). */
+/** Whether the import bindings exist (Settings hides the History import card without them). */
 export const importEnabled = (env: Env): boolean => !!(env.IMPORTS && env.IMPORT_WORKFLOW);
 
 // ---------------------------------------------------------------------------- flash messages
@@ -55,8 +54,6 @@ export const FLASH: { ok: Record<string, (env: Env) => string>; error: Record<st
     "preview-empty-week": () => "There are no plays from last week to preview yet.",
     "preview-empty-month": () => "There are no plays from last month to preview yet.",
     "preview-failed": () => "The preview couldn't be sent. Check Activity for the error.",
-    "toggle-refused": () => "That setting can't be switched from here. Change it in Settings.",
-    "toggle-failed": () => "That setting couldn't be saved. Try again in Settings.",
   },
 };
 
@@ -77,39 +74,41 @@ export function flashNotice(url: URL, env: Env): Notice | undefined {
 async function homePage(env: Env, ctx: ExecutionContext, session: Session, notice: Notice | undefined): Promise<Response> {
   const settings = await loadSettings(env.DB, env);
   const data = await fillArt(env, ctx, await loadHome(env.DB, { now: Date.now(), timeZone: settings.values.timeZone }));
-  const body = render(HomeView({ data, settings: settings.values, aiAvailable: !!env.OPENAI_API_KEY, writeMode: parseWriteMode(env.WRITE_MODE) }));
-  return renderPage({ title: "Home", session, nav: "home", layout: "wide", hideTitle: true, body, notice, importEnabled: importEnabled(env) });
+  const body = render(HomeView({ data, writeMode: parseWriteMode(env.WRITE_MODE) }));
+  return renderPage({ title: "Home", session, nav: "home", layout: "wide", hideTitle: true, body, notice, showActivity: settings.values.advanced });
 }
 
-async function managePage(env: Env, session: Session, url: URL): Promise<Response> {
-  const db = env.DB;
-  const [settings, status] = await Promise.all([loadSettings(db, env), loadStatus(db)]);
-  const email = emailConfig(env, settings.values);
-  let importHtml = "";
-  if (importEnabled(env)) {
-    try {
-      importHtml = await importCard(db, settings.values.timeZone);
-    } catch (err) {
-      // The rest of the page still works without the import card.
-      console.error(JSON.stringify({ dashboard: "import card failed", error: err instanceof Error ? err.message : String(err) }));
-    }
+/** The History import section for Settings: "" without the import bindings or when it can't be read. */
+async function importSectionHtml(env: Env, timeZone: string): Promise<string> {
+  if (!importEnabled(env)) return "";
+  try {
+    return await importSection(env.DB, timeZone);
+  } catch (err) {
+    // The rest of the page still works without the import section.
+    console.error(JSON.stringify({ dashboard: "import section failed", error: err instanceof Error ? err.message : String(err) }));
+    return "";
   }
-  const body = manageBody({
+}
+
+/**
+ * The settings page: the settings, the live state (loadStatus) and the import card. `extra` is the
+ * refused save's posted form and errors, or the first visit's welcome.
+ */
+async function renderSettings(env: Env, session: Session, extra: Pick<SettingsView, "submitted" | "errors" | "welcome">, page: Pick<PageOptions, "notice" | "status">): Promise<Response> {
+  const [settings, status] = await Promise.all([loadSettings(env.DB, env), loadStatus(env.DB)]);
+  const importHtml = await importSectionHtml(env, settings.values.timeZone);
+  const email = emailConfig(env, settings.values);
+  const body = settingsBody({
     session,
+    settings,
+    env,
     status,
-    values: settings.values,
     writeMode: parseWriteMode(env.WRITE_MODE),
     email: { configured: !!(email.binding && email.from && email.to), to: email.to ?? null },
-    aiAvailable: !!env.OPENAI_API_KEY,
     importHtml,
+    ...extra,
   });
-  return renderPage({ title: "Manage", session, nav: "manage", body, notice: flashNotice(url, env), importEnabled: importEnabled(env) });
-}
-
-async function settingsPage(env: Env, session: Session, url: URL): Promise<Response> {
-  const settings = await loadSettings(env.DB, env);
-  const body = settingsBody({ session, settings, env, welcome: url.searchParams.get("welcome") === "1" });
-  return renderPage({ title: "Settings", session, nav: "settings", body, notice: flashNotice(url, env), importEnabled: importEnabled(env) });
+  return renderPage({ title: "Settings", session, nav: "settings", layout: "wide", body, showActivity: settings.values.advanced, scripts: ["/settings-form.js"], ...page });
 }
 
 /** POST /settings: saves through saveSettings; a refused save shows the form again with the errors. */
@@ -117,51 +116,24 @@ async function saveSettingsForm(request: Request, env: Env, session: Session): P
   const form = await request.formData();
   const result = await saveSettings(env.DB, env, form);
   if (result.ok) return redirect303(`/settings?ok=${form.has("reset") ? "reset" : result.changed.length ? "saved" : "unchanged"}`);
-  const settings = await loadSettings(env.DB, env);
-  const body = settingsBody({ session, settings, env, submitted: form, errors: result.errors });
-  return renderPage({ title: "Settings", session, nav: "settings", body, status: 400, importEnabled: importEnabled(env) });
+  return renderSettings(env, session, { submitted: form, errors: result.errors }, { status: 400 });
 }
 
-/**
- * Settings the Home widget may switch with one POST /settings/toggle. Liked Songs only off: turning
- * it on needs the confirmation on /settings. Hidden or deploy-fixed settings (the AI editor without
- * OPENAI_API_KEY) are refused too.
- */
-const TOGGLES = new Set<SettingKey>(["digestWeekly", "digestMonthly", "frequent", "onThisDay", "forgottenFavorites", "aiEditor", "liked"]);
-
-/**
- * POST /settings/toggle (key, value=true|false): saves that one key through saveSettings (keys not
- * posted are untouched), then back to Home's settings widget.
- */
-async function toggleSetting(request: Request, env: Env): Promise<Response> {
-  const form = await request.formData();
-  const key = String(form.get("key") ?? "");
-  const value = form.get("value");
-  if (key === "liked" && value === "true") return redirect303("/settings#s-liked");
-  const def = isSettingKey(key) && TOGGLES.has(key) ? settingDef(key) : null;
-  if (!def || (value !== "true" && value !== "false") || def.visible?.(env) === false || def.force?.(env) !== undefined) {
-    return redirect303("/?error=toggle-refused");
-  }
-  const one = new FormData();
-  one.set(def.key, value);
-  const result = await saveSettings(env.DB, env, one);
-  if (!result.ok) return redirect303("/?error=toggle-failed");
-  return redirect303(`/?ok=${result.changed.length ? "saved" : "unchanged"}#settings`);
-}
-
+/** GET /activity, a page of the `advanced` setting: without it, back to the setting. */
 async function activityPage(env: Env, session: Session, url: URL): Promise<Response> {
   const [settings, data] = await Promise.all([loadSettings(env.DB, env), loadActivity(env.DB)]);
-  return renderPage({ title: "Activity", session, nav: "activity", body: activityBody(data, settings.values.timeZone), notice: flashNotice(url, env), importEnabled: importEnabled(env) });
+  if (!settings.values.advanced) return redirect303("/settings#s-advanced");
+  return renderPage({ title: "Activity", session, nav: "activity", layout: "wide", body: activityBody(data, settings.values.timeZone), notice: flashNotice(url, env), showActivity: true });
 }
 
 // ---------------------------------------------------------------------------- router
 
-const PAGES = new Set(["/", "/manage", "/settings", "/activity"]);
-const POSTS = new Set(["/settings", "/settings/toggle", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"]);
+const PAGES = new Set(["/", "/settings", "/activity"]);
+const POSTS = new Set(["/settings", "/actions/sync", "/actions/preview", "/actions/playlist/recreate"]);
 
 /**
- * GET / (landing without a session, home with one), GET /manage, GET/POST /settings, POST
- * /settings/toggle, GET /activity and POST /actions/*; null for any other path. Owner pages without
+ * GET / (landing without a session, home with one), GET/POST /settings, GET /activity and POST
+ * /actions/*; null for any other path. Owner pages without
  * a session: authRequired(request). The router has already checked Origin on non-GET requests.
  */
 export async function handleDashboard(request: Request, env: Env, ctx: ExecutionContext, session: Session | null): Promise<Response | null> {
@@ -175,13 +147,11 @@ export async function handleDashboard(request: Request, env: Env, ctx: Execution
 
   if (read && PAGES.has(path)) {
     if (path === "/") return homePage(env, ctx, session, flashNotice(url, env));
-    if (path === "/manage") return managePage(env, session, url);
-    if (path === "/settings") return settingsPage(env, session, url);
+    if (path === "/settings") return renderSettings(env, session, { welcome: url.searchParams.get("welcome") === "1" }, { notice: flashNotice(url, env) });
     return activityPage(env, session, url);
   }
   if (request.method === "POST" && POSTS.has(path)) {
     if (path === "/settings") return saveSettingsForm(request, env, session);
-    if (path === "/settings/toggle") return toggleSetting(request, env);
     if (path === "/actions/sync") return syncNow(env);
     const form = await request.formData();
     if (path === "/actions/preview") return sendPreview(form, env, await loadSettings(env.DB, env));

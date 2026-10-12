@@ -9,6 +9,6 @@
 // - public/import.js: the uploader (the dashboard's only JavaScript)
 
 export type { ImportParams } from "../env";
-export { importCard } from "./page";
+export { importSection } from "./page";
 export { handleImportRoutes } from "./routes";
 export { ImportWorkflow } from "./workflow";

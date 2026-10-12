@@ -5,7 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Session } from "../../src/auth";
 import { migrate } from "../../src/db/schema";
 import type { Env } from "../../src/env";
-import { importCard } from "../../src/import";
+import { importSection } from "../../src/import";
 import { LIMITS, PART_SIZE } from "../../src/import/limits";
 import { importPage, STUCK_MS } from "../../src/import/page";
 import type { Preview } from "../../src/import/store";
@@ -191,7 +191,7 @@ describe("escaping", () => {
     const reading = await page();
     expect(reading).toContain(`<dt>Status</dt><dd>${ESCAPED}</dd>`);
     expect(reading).not.toContain("<img");
-    const card = await importCard(db);
+    const card = await importSection(db);
     expect(card).toContain(`<p>${ESCAPED}</p>`);
     expect(card).not.toContain("<img");
   });
@@ -204,13 +204,13 @@ describe("escaping", () => {
   });
 });
 
-describe("Import card", () => {
-  it("is an HTML string for the Manage page in each state", async () => {
-    expect(await importCard(db)).toBe(
-      '<section class="card" id="import" aria-labelledby="import-title"><div class="card-head"><h2 id="import-title">History import</h2></div><p>Add everything you played before spotify-sync started, from Spotify&#39;s Extended streaming history.</p><div class="actions"><a class="btn btn-primary" href="/import">Import history</a></div></section>',
+describe("Import section", () => {
+  it("is an HTML string for the Settings page's Account card in each state", async () => {
+    expect(await importSection(db)).toBe(
+      '<div class="card-part" id="import"><div class="part-head"><h3>History import</h3></div><p>Add everything you played before spotify-sync started, from Spotify&#39;s Extended streaming history.</p><div class="actions"><a class="btn btn-primary" href="/import">Import history</a></div></div>',
     );
     await insertImport(db, { status: "review", preview: PREVIEW });
-    const review = await importCard(db);
+    const review = await importSection(db);
     expect(review).toContain('<span class="pill pill-warn">Ready to review</span>');
     expect(review).toContain('<a class="btn btn-primary" href="/import">Review the import</a>');
   });

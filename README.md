@@ -77,7 +77,7 @@ npm run configure                                  # writes wrangler.generated.t
 | `ALERT_FROM` | yes | Sender address, on a domain onboarded to Cloudflare Email Service |
 | `ALERT_EMAIL_TO` | yes | Your inbox: the setup link, alerts and digests go here, and only here |
 | `settings` | no | First-run defaults for the dashboard settings, e.g. `{"timeZone": "Europe/Berlin", "liked": true}` (see [Settings](#settings)) |
-| `imports` | no, `true` | `false` leaves out the R2 bucket and the Workflow and hides the Import page |
+| `imports` | no, `true` | `false` leaves out the R2 bucket and the Workflow and hides the history import |
 
 `configure` turns these into the Worker's runtime vars:
 
@@ -123,7 +123,7 @@ Your username is on your Spotify account overview. The tables are created by the
 
 ### 7. Optional extras
 
-- **Your whole history.** Request your *Extended streaming history* from Spotify's privacy page, then upload it on the dashboard's Import page (see [History import](#history-import)).
+- **Your whole history.** Request your *Extended streaming history* from Spotify's privacy page, then upload it from the dashboard's Settings page (see [History import](#history-import)).
 - **Email Service.** Onboard your sending domain with `npx wrangler email sending enable <domain>` or the dashboard. The binding can only send to `ALERT_EMAIL_TO`; verify that address if Cloudflare asks you to.
 - **Rate limiting.** A Cloudflare WAF rate-limiting rule on `/login`, `/claim` and `/auth/` (the free plan includes one rule per zone) limits login attempts per IP. The Worker already rate-limits the only unauthenticated action that sends email.
 
@@ -150,7 +150,7 @@ Instances deployed before the dashboard had more deploy config keys: `SPOTIFY_US
 1. **Spotify app:** add the redirect URI `https://<your domain>/auth/callback`.
 2. **R2:** create the bucket `<WORKER_NAME>-imports` and its lifecycle rule (step 3 above) before deploying, or set `"imports": false`.
 3. **Deploy this version with your current deploy config, unchanged.** `configure` warns that it rendered the pre-dashboard keys as vars; that's expected.
-4. **Wait for the first cron** (within 10 minutes), then log in at `https://<your domain>` and check **Activity** for "Moved the deploy config's settings into the dashboard: ...". (`wrangler tail` shows `{"legacyConfig":"imported"}`.) Settings now shows your previous behaviour, marked **Changed here**.
+4. **Wait for the first cron** (within 10 minutes), then log in at `https://<your domain>`, switch on **Advanced** in Settings and check **Activity** for "Moved the deploy config's settings into the dashboard: ...". (`wrangler tail` shows `{"legacyConfig":"imported"}`.) Settings now shows your previous behaviour, each with a **Reset** button.
 5. **Then remove those keys** from your deploy config (and paste the smaller `DEPLOY_CONFIG` into Workers Builds), and redeploy. Nothing changes.
 6. **Clean up:** remove the old `https://<your domain>/reconnect/callback` redirect URI and the `SYNC_FULL_SECRET` secret (`npx wrangler secret delete SYNC_FULL_SECRET -c wrangler.generated.toml`); `POST /sync-full` is gone. Old reconnect links in alert emails now open the login.
 
@@ -182,11 +182,9 @@ Each instance uses 4 cron triggers and one Worker; check the [Workers limits](ht
 
 | Page | What's there |
 |---|---|
-| Home | Your listening at a glance: song of the week on a spinning record, this week and month so far (with changes against the same point last week and month), top tracks, artists and genres, listening by day (week, month or year), when you listen, your streak and best day, what's new to you, a throwback, the latest and next digests, and quick switches for the main settings. A status chip shows whether syncing is healthy and links to Manage |
-| Manage | Spotify status and **Sync now**; problems (failing jobs with their last error); emails (next digest, **Send me a preview**, alerts, AI edits used); playlists, with **Recreate** for one you deleted in Spotify; the import; recent activity |
-| Settings | Every [setting](#settings) with where its value comes from; **Reconnect Spotify**, **Log out everywhere** |
-| Activity | Recent syncs, jobs, emails, logins and setting changes, and the latest Spotify changes |
-| Import | [History import](#history-import) |
+| Home | Your listening at a glance: song of the week, this week and month so far (with changes against the same point last week and month), top tracks, artists and genres, listening by day (this week, the last 30 days or the last 12 months), when you listen, your streak and best day, what's new to you and a throwback. A status chip shows whether syncing is healthy and links to Settings |
+| Settings | Most used first: problems (failing jobs with their last error, only while there are any); every [setting](#settings) with where its value comes from, and under it what it's doing: a playlist's link (or **Recreate** for one you deleted in Spotify), a digest's next send and **Send me a preview**, the AI edits used; then Spotify status and **Sync now** (on top while Spotify needs you), the [history import](#history-import) and, with **Advanced** on, **Reconnect Spotify** / **Log out everywhere**. Advanced also shows problem alerts and the time zone |
+| Activity | With **Advanced** on: recent syncs, jobs, emails, logins and setting changes, and the latest Spotify changes |
 
 **Who can log in.** The owner is the Spotify account that completed the setup link, pinned in D1 (`state` `owner:spotify_id`). **Log in with Spotify** accepts only that account and saves its fresh refresh token, so logging in also reconnects an expired Spotify login. Sessions last 30 days; **Log out** ends this one, **Log out everywhere** all of them. To reset the owner, delete `owner:spotify_id` and the `sessions` rows in D1: the next cron emails a new setup link, and whoever completes it becomes the owner (until then the jobs keep using the old Spotify login).
 
@@ -200,16 +198,17 @@ Each instance uses 4 cron triggers and one Worker; check the [Workers limits](ht
 | `artistPlaylists` | on | Per-artist playlists |
 | `hindiFavorites` | off | Hindi Favorites playlist |
 | `onThisDay`, `forgottenFavorites`, `holiday` | on | History and holiday playlists |
-| `alerts` | on | Failure, recovery and sync-gap emails |
+| `alerts` | on | Failure, recovery and sync-gap emails (shown with `advanced` on) |
 | `digestWeekly`, `digestMonthly` | on | Weekly digest, monthly recap |
 | `aiEditor` | off | The digests' [AI editor](#ai-editor-optional); shown only when `OPENAI_API_KEY` is set |
-| `timeZone` | `UTC` | When your day and week start: history playlists, the holiday season, digests, times in emails and on the dashboard |
+| `timeZone` | `UTC` | When your day and week start: history playlists, the holiday season, digests, times in emails and on the dashboard (shown with `advanced` on) |
+| `advanced` | off | Shows the Activity page, problem alerts, the time zone and the account controls on the dashboard |
 
 **Precedence**, per setting: a value changed on the dashboard, then the deploy config's `settings` (the `SETTINGS` var), then the default above. The dashboard stores only values that differ from the layer below, and **Reset** removes one, so a later change to the deploy config or the defaults applies again. An invalid value never breaks a job: it's skipped for the next layer and listed at the top of the Settings page. Jobs read the settings once per run; changes apply from the next run.
 
 ## History import
 
-Spotify's recently-played API only reaches back 50 plays. For everything before, request **Extended streaming history** at spotify.com/account/privacy (it can take up to 30 days), then open **Import** on the dashboard:
+Spotify's recently-played API only reaches back 50 plays. For everything before, request **Extended streaming history** at spotify.com/account/privacy (it can take up to 30 days), then open **History import** on the dashboard's Settings page:
 
 1. **Upload** the zip Spotify emails you (up to 300 MB), or the `Streaming_History_Audio_*.json` files inside it (up to 40). Keep the tab open while it uploads; that's the only part that needs it.
 2. The Worker reads it in the background and emails you when it's **ready to review**: per year, the plays it will add, complete (adding the export's details to plays it already has) and remove. It warns if the export looks like another account's, or would remove many previously imported plays.
@@ -223,7 +222,7 @@ Inside the export's span, plays become exactly its streams of 30 seconds or more
 - **Workflows**: the `ImportWorkflow` class, deployed with the Worker as `<WORKER_NAME>-import`. Nothing to create.
 - **Workers Paid**, which the project needs anyway: a full import is a couple of hundred Workflow steps, some needing several seconds of CPU.
 
-Cost on Workers Paid is effectively zero (minutes of R2 storage, a few hundred Workflow steps, and a few million D1 rows written, inside the included 50 million). `"imports": false` in the deploy config leaves out the bucket and the Workflow and hides the Import page; `npm run import-history` still works from the command line.
+Cost on Workers Paid is effectively zero (minutes of R2 storage, a few hundred Workflow steps, and a few million D1 rows written, inside the included 50 million). `"imports": false` in the deploy config leaves out the bucket and the Workflow and hides the history import; `npm run import-history` still works from the command line.
 
 ## Commands
 
@@ -329,7 +328,7 @@ src/
   runtime.ts          withJob (migrations, settings, alerts, activity, D1 query count), email configs, legacy config import
   settings.ts         the settings registry, precedence, load/save
   auth/               owner, setup link (claim), Spotify login (one OAuth callback), sessions
-  dashboard/          server-rendered TSX pages (landing, home, manage, settings, activity), their data, actions, styles
+  dashboard/          server-rendered TSX pages (landing, home, settings, activity), their data, actions, styles
   import/             history import: upload routes, zip reader, parser, staging, review, apply, Workflow, emails
   http.ts             security headers, CSP nonce, cookies, CSRF (Origin) check
   activity.ts         the dashboard's activity log

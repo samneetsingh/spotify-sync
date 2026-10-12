@@ -1,7 +1,6 @@
-// Everything the home page shows about the instance, read in one db.batch (plus the settings and
-// session reads the router already does). Never reads the refresh token's value, only whether it exists.
+// The live state the settings page shows about the instance, read in one db.batch (plus the
+// settings and session reads the router already does). Never reads the refresh token's value, only whether it exists.
 
-import type { ActivityEvent, ActivityKind } from "../activity";
 import { callsKey, MODE_KEY } from "../editor";
 import { PLACEHOLDER_PREFIX, playlistStateKey } from "../jobs/owned-playlists";
 
@@ -56,7 +55,6 @@ export interface DashboardStatus {
   /** state playlist:<key> for the owned playlists (null = not created yet, "off" = deleted in Spotify). */
   playlistState: Record<OwnedPlaylistKey, string | null>;
   artistPlaylists: Array<{ id: string; name: string }>;
-  recent: ActivityEvent[];
 }
 
 /** SQLite datetime('now') text ("2026-10-11 15:20:00", UTC) to epoch ms. */
@@ -109,7 +107,7 @@ export async function loadStatus(db: D1Database, now = Date.now()): Promise<Dash
   const aiKey = callsKey(now);
   const keys = [TOKEN_KEY, "recap:last_week", "recap:last_month", MODE_KEY, aiKey, ...OWNED_PLAYLISTS.map((p) => playlistStateKey(p.key))];
   const placeholders = keys.map((_, i) => `?${i + 1}`).join(", ");
-  const [state, lastRun, lastSuccess, total, week, artists, recent] = await db.batch([
+  const [state, lastRun, lastSuccess, total, week, artists] = await db.batch([
     // The token's value never leaves D1. ';' sorts right after ':', so the range is the alert_failing: prefix.
     db
       .prepare(
@@ -125,7 +123,6 @@ export async function loadStatus(db: D1Database, now = Date.now()): Promise<Dash
       `SELECT playlist_id AS id, name FROM playlists WHERE playlist_type = 'artist' AND playlist_id NOT LIKE '${PLACEHOLDER_PREFIX}%'
        ORDER BY name COLLATE NOCASE`,
     ),
-    db.prepare("SELECT id, at, kind, ok, summary, detail FROM activity ORDER BY at DESC, id DESC LIMIT 5"),
   ]);
 
   const values = new Map((state!.results as Array<{ key: string; value: string }>).map((r) => [r.key, r.value]));
@@ -152,6 +149,5 @@ export async function loadStatus(db: D1Database, now = Date.now()): Promise<Dash
     aiPaused: values.get(MODE_KEY) === "off",
     playlistState: Object.fromEntries(OWNED_PLAYLISTS.map((p) => [p.key, values.get(playlistStateKey(p.key)) ?? null])) as Record<OwnedPlaylistKey, string | null>,
     artistPlaylists: artists!.results as Array<{ id: string; name: string }>,
-    recent: (recent!.results as Array<Omit<ActivityEvent, "ok"> & { ok: number; kind: ActivityKind }>).map((r) => ({ ...r, ok: r.ok === 1 })),
   };
 }

@@ -432,7 +432,8 @@ export async function importPage(env: Env, db: D1Database, session: Session, opt
     renderPage({
       title: "Import history",
       session,
-      nav: "import",
+      nav: "settings",
+      showActivity: values.advanced,
       body: render(<>{body}</>),
       notice,
       refreshSeconds: extra.refresh ? REFRESH_SECONDS : undefined,
@@ -467,16 +468,23 @@ export async function importPage(env: Env, db: D1Database, session: Session, opt
 }
 
 /**
- * The Manage page's Import card (HTML; the page embeds it with raw()), times in `timeZone`. Shown
- * only when IMPORTS and IMPORT_WORKFLOW are bound.
+ * The History import section of the Settings page's Account card (HTML; the page embeds it with
+ * raw()), times in `timeZone`. Shown only when IMPORTS and IMPORT_WORKFLOW are bound.
  */
-export async function importCard(db: D1Database, timeZone = "UTC"): Promise<string> {
+export async function importSection(db: D1Database, timeZone = "UTC"): Promise<string> {
   const row = await latestImport(db);
   const card = (head: Child, text: Child, label: string, variant: "primary" | "secondary" = "secondary") =>
     render(
-      <Card title="History import" id="import" head={head} actions={<LinkButton href="/import" label={label} variant={variant} />}>
+      <div class="card-part" id="import">
+        <div class="part-head">
+          <h3>History import</h3>
+          {head}
+        </div>
         <p>{text}</p>
-      </Card>,
+        <div class="actions">
+          <LinkButton href="/import" label={label} variant={variant} />
+        </div>
+      </div>,
     );
   switch (row?.status) {
     case "reading":

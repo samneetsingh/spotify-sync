@@ -53,14 +53,6 @@ const OWNED_PLAYLISTS = [
 
 export type DigestKind = "week" | "month";
 
-/**
- * `state` key of the last digest that went out (the dashboard's Home shows it): JSON
- * {kind, subject, period, sentAt}, written after a successful live send only (not previews, not dry
- * runs). `period` is the label the email uses ("Sep 28 to Oct 4", "September 2026"), not the
- * period key; `sentAt` is epoch ms.
- */
-export const LAST_DIGEST_KEY = "digest:last";
-
 export interface Period {
   kind: DigestKind;
   /** First day of the period. */
@@ -153,10 +145,7 @@ async function runDigest(
     return { period: period.key, sent: false };
   }
   const sent = await sendEmail(alerts, email);
-  if (sent) {
-    await setState(db, stateKey, period.key);
-    await recordLastDigest(db, { kind, subject: email.subject, period: digestCopy(data).label, sentAt: now });
-  }
+  if (sent) await setState(db, stateKey, period.key);
   console.log(JSON.stringify({ job, period: period.key, sent }));
   // Email is set up but this send failed: fail the job so withJob alerts (a plain alert can get
   // through where the digest didn't). It is retried tomorrow.
@@ -164,15 +153,6 @@ async function runDigest(
     throw new Error(`The ${period.key} ${kind === "month" ? "recap" : "digest"} email could not be sent; retrying tomorrow`);
   }
   return { period: period.key, sent };
-}
-
-/** The Home's "latest digest" (LAST_DIGEST_KEY). Only for show: a failed write never fails the job. */
-async function recordLastDigest(db: D1Database, last: { kind: DigestKind; subject: string; period: string; sentAt: number }): Promise<void> {
-  try {
-    await setState(db, LAST_DIGEST_KEY, JSON.stringify(last));
-  } catch (err) {
-    console.warn(JSON.stringify({ digest: "digest:last not saved", error: err instanceof Error ? err.message : String(err) }));
-  }
 }
 
 /**

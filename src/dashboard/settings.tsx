@@ -1,36 +1,56 @@
-// The settings page, rendered from the registry (src/settings.ts): one fieldset per group, each
-// control with its description, where its value comes from (with Reset for dashboard changes), and
-// the Liked Songs confirmation. The form follows saveSettings' encoding (see src/settings.ts):
+// The settings page, most used and least risky first: problems (only while a job fails), the
+// everyday settings (Playlists, Emails), then General, the Spotify card and the Account card
+// (History import; with Advanced, sign-in), then the save bar. The Spotify card moves to the top
+// while it needs the owner (not connected, or the login expired). The save bar sits outside the
+// form (form="settings") and public/settings-form.js shows it only once a setting has changed.
+// The form is rendered from the registry (src/settings.ts): one fieldset per group, each
+// control with its description, its status line (settings-status.tsx), where its value comes from
+// (with Reset for dashboard changes), and the Liked Songs confirmation. Settings marked
+// `advancedOnly` show only while the `advanced` setting is on. The form follows saveSettings' encoding (see src/settings.ts):
 // booleans post a hidden "false" then the checkbox "true", `confirm_<key>=yes` acknowledges a
 // `confirmOn` warning, and Reset posts only `reset=<key>` from its own form. Field ids and names are
-// fixed: tests and links (Home's /settings#s-liked) rely on them.
+// fixed: tests and `#s-<key>` links rely on them. The History import section is importSection's
+// escaped HTML, through raw().
 
+import type { Child } from "hono/jsx";
 import type { Session } from "../auth";
-import type { Env } from "../env";
+import type { Env, WriteMode } from "../env";
 import {
   SETTING_DEFS,
   SETTING_GROUPS,
   confirmField,
   type EffectiveSettings,
   type SettingDef,
+  type SettingGroup,
   type SettingKey,
   type SettingSource,
 } from "../settings";
-import { Card, Facts, LinkButton, PostButton } from "./components/primitives";
-import { render } from "./render";
+import { Card, LinkButton, PostButton } from "./components/primitives";
+import { raw, render } from "./render";
+import { ActionForms, emailsNote, ProblemsCard, settingLines, SpotifyCard, type StatusView } from "./settings-status";
+import type { DashboardStatus } from "./status";
+import { syncState } from "./sync-state";
 
 export interface SettingsView {
   session: Session;
   settings: EffectiveSettings;
   env: Env;
+  /** Live state for the Spotify and Problems cards and the status lines. */
+  status: DashboardStatus;
+  writeMode: WriteMode;
+  /** Email binding and both addresses are set; `to` is where everything goes. */
+  email: { configured: boolean; to: string | null };
   /** After a refused save: the posted form (shown again so nothing is lost) and the errors per key. */
   submitted?: FormData;
   errors?: Partial<Record<SettingKey, string>>;
+  /** The History import section's HTML (already escaped); empty when import isn't set up. */
+  importHtml?: string;
   /** First visit after the claim: the "your first sync runs within 10 minutes" banner. */
   welcome?: boolean;
 }
 
-const SOURCE_LABEL: Record<SettingSource, string> = { dashboard: "Changed here", deploy: "From deploy config", default: "Default" };
+/** Where a value comes from; a value changed here shows only its Reset button. */
+const SOURCE_LABEL: Record<Exclude<SettingSource, "dashboard">, string> = { deploy: "From deploy config", default: "Default" };
 
 /** IANA zones for the select, grouped by region ("America", "Europe", ...), with UTC first. */
 function timeZones(current: string): Map<string, string[]> {
@@ -56,17 +76,18 @@ function shown(v: SettingsView, def: SettingDef): string | boolean {
   return def.type === "boolean" ? value === true : String(value);
 }
 
-/** Where the value comes from, and Reset (which submits the key's own form) for dashboard changes. */
+/** Where the value comes from, or for a value changed here, Reset (which submits the key's own form). */
 function MetaRow({ v, def }: { v: SettingsView; def: SettingDef }) {
   const source = v.settings.source[def.key];
   return (
     <div class="meta-row">
-      <span class={`source source-${source}`}>{SOURCE_LABEL[source]}</span>
       {source === "dashboard" ? (
         <button type="submit" form={`reset-${def.key}`} class="btn btn-small" aria-label={`Reset ${def.label}`}>
           Reset
         </button>
-      ) : null}
+      ) : (
+        <span class={`source source-${source}`}>{SOURCE_LABEL[source]}</span>
+      )}
     </div>
   );
 }
@@ -80,9 +101,9 @@ function errorFor(v: SettingsView, def: SettingDef): string | undefined {
 }
 
 /** The time zone <select>: UTC first, then one <optgroup> per region. */
-function TimeZoneSelect({ id, name, value, describedBy, invalid }: { id: string; name: string; value: string; describedBy: string; invalid: boolean }) {
+function TimeZoneSelect({ id, name, value, describedBy, invalid, form }: { id: string; name: string; value: string; describedBy: string; invalid: boolean; form?: string }) {
   return (
-    <select id={id} name={name} aria-describedby={describedBy} aria-invalid={invalid ? "true" : undefined}>
+    <select id={id} name={name} form={form} aria-describedby={describedBy} aria-invalid={invalid ? "true" : undefined}>
       {[...timeZones(value)].map(([region, zones]) => {
         const options = zones.map((z) => (
           <option value={z} selected={z === value}>
@@ -95,7 +116,8 @@ function TimeZoneSelect({ id, name, value, describedBy, invalid }: { id: string;
   );
 }
 
-function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
+/** One setting. `form`: the settings form's id, for a control rendered outside that form (General). */
+function Control({ v, def, line, form }: { v: SettingsView; def: SettingDef; line?: Child; form?: string }) {
   const id = `f-${def.key}`;
   const error = errorFor(v, def);
   const describedBy = `d-${def.key}${error ? ` e-${def.key}` : ""}`;
@@ -106,9 +128,12 @@ function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
     </p>
   ) : null;
   const desc = (
-    <p class="desc" id={`d-${def.key}`}>
-      {def.description}
-    </p>
+    <>
+      <p class="desc" id={`d-${def.key}`}>
+        {def.description}
+      </p>
+      {line ? <div class="setting-status">{line}</div> : null}
+    </>
   );
   const forced = def.force?.(v.env);
 
@@ -135,15 +160,15 @@ function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
           </p>
           <p>{def.confirmOn}</p>
           <label>
-            <input type="checkbox" name={confirmField(def.key)} value="yes" checked={ack} /> I understand. Turn it on.
+            <input type="checkbox" name={confirmField(def.key)} value="yes" checked={ack} form={form} /> I understand. Turn it on.
           </label>
         </div>
       ) : null;
     return (
       <div class={`setting${def.confirmOn ? " gated" : ""}`} id={`s-${def.key}`}>
         <div class="control">
-          <input type="hidden" name={def.key} value="false" />
-          <input class="toggle" type="checkbox" id={id} name={def.key} value="true" aria-describedby={describedBy} checked={shown(v, def) === true} aria-invalid={invalid} />
+          <input type="hidden" name={def.key} value="false" form={form} />
+          <input class="toggle" type="checkbox" id={id} name={def.key} value="true" form={form} aria-describedby={describedBy} checked={shown(v, def) === true} aria-invalid={invalid} />
         </div>
         <label for={id}>{def.label}</label>
         {desc}
@@ -163,6 +188,7 @@ function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
         step="1"
         id={id}
         name={def.key}
+        form={form}
         value={value}
         min={def.min}
         max={def.max}
@@ -171,7 +197,7 @@ function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
         aria-invalid={invalid}
       />
     ) : (
-      <TimeZoneSelect id={id} name={def.key} value={value} describedBy={describedBy} invalid={!!error} />
+      <TimeZoneSelect id={id} name={def.key} value={value} describedBy={describedBy} invalid={!!error} form={form} />
     );
   return (
     <div class="setting field" id={`s-${def.key}`}>
@@ -184,26 +210,24 @@ function Control({ v, def }: { v: SettingsView; def: SettingDef }) {
   );
 }
 
-function AccountCard({ session }: { session: Session }) {
-  const name = session.displayName ? (
-    <>
-      {session.displayName}
-      <span class="sub">{session.spotifyId}</span>
-    </>
-  ) : (
-    session.spotifyId
-  );
-  const actions = (
-    <>
-      <LinkButton href="/login?next=%2Fsettings" label="Reconnect Spotify" />
-      <PostButton action="/logout" label="Log out" />
-      <PostButton action="/logout/all" label="Log out everywhere" variant="danger" />
-    </>
-  );
+/** The History import section, then sign-in: Log out, and with Advanced, Reconnect and Log out everywhere (the dashboard's only log-outs). */
+function AccountCard({ importHtml, advanced }: { importHtml: string; advanced: boolean }) {
   return (
-    <Card title="Account" id="account" actions={actions}>
-      <Facts rows={[["Spotify account", name]]} />
-      <p class="note">Reconnect if Spotify asks you to log in again; only your account is accepted. Log out everywhere ends the dashboard on every device.</p>
+    <Card title="Account" id="account">
+      {importHtml ? raw(importHtml) : null}
+      <div class="card-part" id="sign-in">
+        <div class="part-head">
+          <h3>Sign-in</h3>
+        </div>
+        {advanced ? (
+          <p class="note">Reconnect if Spotify asks you to log in again; only your account is accepted. Log out everywhere ends the dashboard on every device.</p>
+        ) : null}
+        <div class="actions">
+          {advanced ? <LinkButton href="/login?next=%2Fsettings" label="Reconnect Spotify" /> : null}
+          <PostButton action="/logout" label="Log out" />
+          {advanced ? <PostButton action="/logout/all" label="Log out everywhere" variant="danger" /> : null}
+        </div>
+      </div>
     </Card>
   );
 }
@@ -213,7 +237,28 @@ export function Settings({ v }: { v: SettingsView }) {
     const message = errorFor(v, def);
     return message ? [[def, message] as const] : [];
   });
-  const visible = SETTING_DEFS.filter((d) => d.visible?.(v.env) ?? true);
+  const values = v.settings.values;
+  const visible = SETTING_DEFS.filter((d) => (d.visible?.(v.env) ?? true) && (!d.advancedOnly || values.advanced));
+  const sv: StatusView = { session: v.session, status: v.status, values, writeMode: v.writeMode, email: v.email };
+  const state = syncState(v.status, v.status.now);
+  const spotifyFirst = !v.status.connected || state.loginError;
+  // General sits with the rarer cards, after the save bar; its controls still belong to the
+  // settings form (form="settings"), so Save changes saves them too.
+  const groupFieldset = (group: SettingGroup, form?: string) => {
+    const defs = visible.filter((d) => d.group === group);
+    return defs.length ? (
+      <fieldset class={`group-${group.toLowerCase()}`}>
+        <legend>{group}</legend>
+        <div class="settings-list">
+          {defs.map((d) => (
+            <Control v={v} def={d} line={lines[d.key]} form={form} />
+          ))}
+        </div>
+        {group === "Emails" ? <p class="note">{emailsNote(sv, !!v.env.OPENAI_API_KEY)}</p> : null}
+      </fieldset>
+    ) : null;
+  };
+  const lines = settingLines(sv, Object.fromEntries(SETTING_DEFS.map((d) => [d.key, d.label])) as Record<SettingKey, string>);
   return (
     <>
       {v.welcome ? (
@@ -243,24 +288,14 @@ export function Settings({ v }: { v: SettingsView }) {
           </ul>
         </div>
       ) : null}
-      <form method="post" action="/settings" id="settings">
-        {SETTING_GROUPS.map((group) => {
-          const defs = visible.filter((d) => d.group === group);
-          return defs.length ? (
-            <fieldset>
-              <legend>{group}</legend>
-              {defs.map((d) => (
-                <Control v={v} def={d} />
-              ))}
-            </fieldset>
-          ) : null;
-        })}
-        <div class="savebar">
-          <button type="submit" class="btn btn-primary">
-            Save changes
-          </button>
-          <span class="small muted">Changes apply from the next run.</span>
+      {v.status.failing.length || spotifyFirst ? (
+        <div class="dash dash-top">
+          <ProblemsCard v={sv} />
+          {spotifyFirst ? <SpotifyCard v={sv} /> : null}
         </div>
+      ) : null}
+      <form method="post" action="/settings" id="settings" class="dash dash-form">
+        {SETTING_GROUPS.filter((g) => g !== "General").map((group) => groupFieldset(group))}
       </form>
       {/* Reset buttons live inside the settings form but submit these (form="reset-<key>"): only reset=<key> is posted. */}
       {visible
@@ -270,7 +305,19 @@ export function Settings({ v }: { v: SettingsView }) {
             <input type="hidden" name="reset" value={d.key} />
           </form>
         ))}
-      <AccountCard session={v.session} />
+      <ActionForms v={sv} />
+      <div class="dash dash-more">
+        {groupFieldset("General", "settings")}
+        {spotifyFirst ? null : <SpotifyCard v={sv} />}
+        <AccountCard importHtml={v.importHtml ?? ""} advanced={values.advanced} />
+      </div>
+      {/* After a refused save the posted values are what's shown, so the bar stays (data-always). */}
+      <div class="savebar" id="savebar" data-always={errors.length ? "" : undefined}>
+        <button type="submit" form="settings" class="btn btn-primary">
+          Save changes
+        </button>
+        <span class="small muted">Changes apply from the next run.</span>
+      </div>
     </>
   );
 }

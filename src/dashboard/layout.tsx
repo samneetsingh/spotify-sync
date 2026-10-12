@@ -8,12 +8,12 @@ import type { Child } from "hono/jsx";
 import { localTime as alertTime } from "../alerts";
 import type { Session } from "../auth";
 import { cspNonce, html } from "../http";
-import { COLOR, DISPLAY_FONT_URL } from "./tokens";
-import { Notice as NoticeView, PostButton } from "./components/primitives";
+import { PAGE_TOP } from "./tokens";
+import { Notice as NoticeView } from "./components/primitives";
 import { raw, render } from "./render";
 import { CSS } from "./styles";
 
-export type NavKey = "home" | "manage" | "settings" | "activity" | "import";
+export type NavKey = "home" | "settings" | "activity";
 
 export interface Notice {
   /** ok: role=status; error: role=alert; warn: role=status with an amber edge (e.g. settings problems). */
@@ -45,16 +45,14 @@ export interface PageOptions {
   layout?: "default" | "narrow" | "wide";
   /** Keep the <h1> for screen readers and the tab title only (Home, whose hero leads the page). */
   hideTitle?: boolean;
-  /** Show the Import nav item (default true; the dashboard hides it when the import bindings are missing). */
-  importEnabled?: boolean;
+  /** Show the Activity nav item (the `advanced` setting is on). Default: hidden. */
+  showActivity?: boolean;
 }
 
 const NAV: Array<{ key: NavKey; href: string; label: string }> = [
   { key: "home", href: "/", label: "Home" },
-  { key: "manage", href: "/manage", label: "Manage" },
   { key: "settings", href: "/settings", label: "Settings" },
   { key: "activity", href: "/activity", label: "Activity" },
-  { key: "import", href: "/import", label: "Import" },
 ];
 
 export type Tone = "ok" | "warn" | "bad" | "neutral";
@@ -83,12 +81,12 @@ export const localTime = alertTime;
 export type ShellOptions = Omit<PageOptions, "body" | "status">;
 
 /**
- * The page shell: skip link, header (brand; with a session also the nav and "Log out"), then <main>
- * with the notice, the <h1> and the children. `nonce` goes on the one <style>.
+ * The page shell: skip link, header (brand; with a session also the nav), then <main> with the
+ * notice, the <h1> and the children. `nonce` goes on the one <style>. Log out lives in Settings
+ * (the Account card).
  */
 export function Page(props: ShellOptions & { nonce: string; children?: Child }) {
   const { title, session, notice, layout } = props;
-  const items = NAV.filter((n) => n.key !== "import" || props.importEnabled !== false);
   const mainClass = [layout === "narrow" || layout === "wide" ? layout : "", props.hideTitle ? "hide-title" : ""].filter(Boolean).join(" ");
   return (
     <html lang="en">
@@ -97,8 +95,7 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <meta name="robots" content="noindex" />
         <meta name="color-scheme" content="dark" />
-        <meta name="theme-color" content={COLOR.ink} />
-        <link rel="preload" href={DISPLAY_FONT_URL} as="font" type="font/woff2" crossorigin="" />
+        <meta name="theme-color" content={PAGE_TOP} />
         {props.refreshSeconds ? <meta http-equiv="refresh" content={String(Math.max(1, Math.floor(props.refreshSeconds)))} /> : null}
         <title>{title} · spotify-sync</title>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -107,7 +104,7 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
           <script type="module" src={src}></script>
         ))}
       </head>
-      <body>
+      <body class={session ? "with-nav" : undefined}>
         <a class="skip" href="#main">
           Skip to content
         </a>
@@ -116,22 +113,17 @@ export function Page(props: ShellOptions & { nonce: string; children?: Child }) 
             <span class="mark" aria-hidden="true"></span>spotify-sync
           </a>
           {session ? (
-            <>
-              <nav aria-label="Dashboard">
-                <ul>
-                  {items.map((n) => (
-                    <li>
-                      <a href={n.href} aria-current={n.key === props.nav ? "page" : undefined}>
-                        {n.label}
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-              <div class="out">
-                <PostButton action="/logout" label="Log out" small />
-              </div>
-            </>
+            <nav aria-label="Dashboard">
+              <ul>
+                {NAV.filter((n) => n.key !== "activity" || props.showActivity).map((n) => (
+                  <li>
+                    <a href={n.href} aria-current={n.key === props.nav ? "page" : undefined}>
+                      {n.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
           ) : null}
         </header>
         <main id="main" class={mainClass || undefined}>

@@ -1,28 +1,24 @@
-// Home's other components: the vinyl, covers and rows, stat tiles and deltas, the status chip and
-// banner, the empty state, and the settings widget's one-key toggles.
+// Home's other components: the hero cover, covers and rows, stat tiles and deltas, the status chip and
+// banner, and the empty state.
 
 import { describe, expect, it } from "vitest";
-import { ArtistAvatar, Cover, TrackRow, Vinyl, VINYL_SRC } from "../../../src/dashboard/components/music";
-import { SettingsWidget } from "../../../src/dashboard/components/settings-widget";
+import { ArtistAvatar, Cover, HeroCover, TrackRow } from "../../../src/dashboard/components/music";
 import { delta, StatTile } from "../../../src/dashboard/components/stats";
 import { Banner, EmptyState, StatusChip, statusText } from "../../../src/dashboard/components/status";
 import type { HomeStatus } from "../../../src/dashboard/home-data";
 import { render } from "../../../src/dashboard/render";
-import { stubSettings } from "../helpers";
 
 const XSS = `<script>alert("x")</script>`;
 const ESCAPED = "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;";
 const NOW = Date.parse("2026-10-08T22:30:00Z");
 const run = (minutesAgo: number) => ({ id: 1, startedAt: NOW - minutesAgo * 60_000 - 5_000, finishedAt: NOW - minutesAgo * 60_000, status: "success", playsFetched: 2, tracksAdded: 0, error: null });
 
-describe("Vinyl and covers", () => {
-  it("puts the cover under the record's label window; the apricot label without one", () => {
-    const out = render(<Vinyl cover="https://i.scdn.co/image/abc" />);
-    expect(out).toBe(
-      `<div class="vinyl" aria-hidden="true"><div class="vinyl-spin"><img class="vinyl-cover" src="https://i.scdn.co/image/abc" width="86" height="86" alt="" decoding="async"/>` +
-        `<img class="vinyl-disc" src="${VINYL_SRC}" width="216" height="216" alt=""/></div></div>`,
+describe("Hero cover and covers", () => {
+  it("HeroCover: the square album cover, or the empty tile (its CSS background) without one", () => {
+    expect(render(<HeroCover cover="https://i.scdn.co/image/abc" />)).toBe(
+      `<div class="hero-cover" aria-hidden="true"><img src="https://i.scdn.co/image/abc" width="280" height="280" alt="" decoding="async"/></div>`,
     );
-    expect(render(<Vinyl />)).toContain(`<span class="vinyl-cover vinyl-blank"></span>`);
+    expect(render(<HeroCover />)).toBe(`<div class="hero-cover" aria-hidden="true"></div>`);
   });
 
   it("Cover: a fixed-size lazy image with an empty alt, or the missing-art tile", () => {
@@ -63,16 +59,22 @@ describe("StatTile and delta", () => {
       `<div class="tile"><dt>Plays</dt><dd class="tile-value num">1,204</dd><dd class="tile-delta"><span class="delta delta-up"><span aria-hidden="true">↑ </span><span class="vh">up </span>12%</span></dd></div>`,
     );
   });
+
+  it("adds a decorative icon square when asked", () => {
+    const out = render(<StatTile label="Hours" value="4.2" icon="clock" />);
+    expect(out).toMatch(/^<div class="tile"><dt>Hours<\/dt><dd class="tile-value num">4.2<\/dd><dd class="tile-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"[^>]*aria-hidden="true"[^>]*><circle /);
+    expect(out).not.toContain("style=");
+  });
 });
 
 describe("StatusChip and Banner", () => {
   const ok: HomeStatus = { connected: true, lastRun: run(4), lastSuccess: run(4), failing: [] };
 
-  it("the chip links to Manage and says when the last sync finished", () => {
-    expect(render(<StatusChip status={ok} now={NOW} />)).toBe(`<a class="chip chip-ok" href="/manage">Connected, synced 4 min ago</a>`);
+  it("the chip links to the Spotify card in Settings and says when the last sync finished", () => {
+    expect(render(<StatusChip status={ok} now={NOW} />)).toBe(`<a class="chip chip-ok" href="/settings#spotify">Connected, synced 4 min ago</a>`);
     expect(statusText({ ...ok, lastRun: run(90), lastSuccess: run(90) }, NOW)).toBe("Sync delayed, last synced 2 h ago");
     expect(statusText({ ...ok, lastRun: null, lastSuccess: null }, NOW)).toBe("Waiting for first sync");
-    expect(render(<StatusChip status={{ ...ok, connected: false }} now={NOW} />)).toBe(`<a class="chip chip-bad" href="/manage">Not connected</a>`);
+    expect(render(<StatusChip status={{ ...ok, connected: false }} now={NOW} />)).toBe(`<a class="chip chip-bad" href="/settings#spotify">Not connected</a>`);
   });
 
   it("no banner while everything works", () => {
@@ -103,7 +105,7 @@ describe("StatusChip and Banner", () => {
       />,
     );
     expect(jobs).toContain("The last 3 syncs failed. Artist playlists and Weekly digest are failing.");
-    expect(jobs).toContain(`<a class="banner-action" href="/manage#problems">See problems</a>`);
+    expect(jobs).toContain(`<a class="banner-action" href="/settings#problems">See problems</a>`);
   });
 });
 
@@ -111,36 +113,5 @@ describe("EmptyState", () => {
   it("says what's missing and what happens next, escaped", () => {
     const out = render(<EmptyState title={XSS} action={<a href="/login">Connect</a>}>{XSS}</EmptyState>);
     expect(out).toContain(`<p class="empty-title">${ESCAPED}</p><p class="empty-text">${ESCAPED}</p><div class="empty-action"><a href="/login">Connect</a></div>`);
-  });
-});
-
-describe("SettingsWidget", () => {
-  const switches = (html: string) =>
-    [...html.matchAll(/name="key" value="([^"]+)"\/><input type="hidden" name="value" value="(true|false)"\/>/g)].map((m) => `${m[1]}=${m[2]}`);
-
-  it("posts one key and its new value per switch to /settings/toggle", () => {
-    const out = render(<SettingsWidget settings={stubSettings({ digestMonthly: false, forgottenFavorites: false }).values} aiAvailable />);
-    expect(out.match(/action="\/settings\/toggle"/g)).toHaveLength(6);
-    expect(switches(out)).toEqual(["digestWeekly=false", "digestMonthly=true", "aiEditor=true", "frequent=false", "onThisDay=false", "forgottenFavorites=true"]);
-    expect(out).toContain(`<section class="card home-settings" id="settings" aria-labelledby="settings-title">`);
-    expect(out).toContain(`<a href="/settings">All settings</a>`);
-  });
-
-  it("Liked Songs off: a link to the settings page (turning it on needs the confirmation there), not a switch", () => {
-    const out = render(<SettingsWidget settings={stubSettings({ liked: false }).values} aiAvailable={false} />);
-    expect(out).toContain(`<a href="/settings#s-liked">Turn on in Settings</a>`);
-    expect(out).not.toContain(`value="liked"`);
-  });
-
-  it("Liked Songs on: a switch that turns it off", () => {
-    const out = render(<SettingsWidget settings={stubSettings({ liked: true }).values} aiAvailable={false} />);
-    expect(switches(out)).toContain("liked=false");
-    expect(out).not.toContain("liked=true");
-    expect(out).not.toContain("#s-liked");
-  });
-
-  it("hides the AI editor without an OpenAI key", () => {
-    expect(render(<SettingsWidget settings={stubSettings({ aiEditor: true }).values} aiAvailable={false} />)).not.toContain("aiEditor");
-    expect(render(<SettingsWidget settings={stubSettings().values} aiAvailable />)).toContain(`value="aiEditor"`);
   });
 });

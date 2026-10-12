@@ -1,7 +1,8 @@
-// Stat tiles: a big number, its label, and the change against the previous period, said in text
-// ("↑ 12%", read as "up 12%"), never by colour alone.
+// Stat tiles: a big number, its label, the change against the previous period, said in text
+// ("↑ 12%", read as "up 12%"), never by colour alone, and a decorative icon square.
 
 import { fmt } from "../../email/layout";
+import { Icon, type IconName } from "./icons";
 
 export interface Delta {
   dir: "up" | "down" | "same";
@@ -36,10 +37,12 @@ export interface StatTileProps {
   /** Already formatted, e.g. "1,204" or "4.2". */
   value: string;
   delta?: Delta;
+  /** The icon in the tile's blue square (hidden from screen readers). */
+  icon?: IconName;
 }
 
-/** One figure in a `.tiles` list: the value above its label, the delta under both. */
-export function StatTile({ label, value, delta: d }: StatTileProps) {
+/** One figure in a `.tiles` list: its label, the value, the delta, and an icon square on the right. */
+export function StatTile({ label, value, delta: d, icon }: StatTileProps) {
   return (
     <div class="tile">
       <dt>{label}</dt>
@@ -47,6 +50,11 @@ export function StatTile({ label, value, delta: d }: StatTileProps) {
       {d ? (
         <dd class="tile-delta">
           <DeltaText d={d} />
+        </dd>
+      ) : null}
+      {icon ? (
+        <dd class="tile-icon" aria-hidden="true">
+          <Icon name={icon} />
         </dd>
       ) : null}
     </div>

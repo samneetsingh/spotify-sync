@@ -1,7 +1,7 @@
 // HTTP plumbing for the owner dashboard: HTML responses with the security headers, redirects,
 // cookies and the CSRF (Origin) check. Pages themselves are built in src/dashboard.
 
-import { COLOR, DISPLAY_FONT_URL } from "./dashboard/tokens";
+import { COLOR, FONT, GLASS, PAGE_BACKGROUND } from "./dashboard/tokens";
 import { esc } from "./email/layout";
 
 /** A fresh CSP nonce (128 random bits, base64). Use one per response. */
@@ -86,13 +86,14 @@ export function redirect(location: string, status: 302 | 303 = 303, headers?: He
 /** "See other": after a POST, and for pages that moved. */
 export const redirect303 = (location: string, headers?: HeadersInit): Response => redirect(location, 303, headers);
 
-const PAGE_CSS = `@font-face{font-family:"Bricolage Grotesque";src:url(${DISPLAY_FONT_URL}) format("woff2");font-weight:200 800;font-display:swap}
-body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${COLOR.ink};color:${COLOR.text};font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:420px;padding:40px 24px;text-align:center}
-h1{font:700 28px/32px "Bricolage Grotesque",system-ui,sans-serif;margin:0 0 12px}
-p{font-size:16px;line-height:24px;color:${COLOR.soft};margin:0 0 24px}
-a{color:${COLOR.accent};font-size:16px;line-height:24px;text-underline-offset:3px}
-a:focus-visible{outline:2px solid ${COLOR.accent};outline-offset:2px}`;
+const PAGE_CSS = `*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;background:${PAGE_BACKGROUND};background-attachment:fixed;color:${COLOR.text};font-family:${FONT.sans};-webkit-font-smoothing:antialiased}
+main{max-width:420px;padding:40px 32px;border-radius:20px;background:${GLASS.card};${GLASS.blur};${GLASS.edge};text-align:center}
+h1{font-size:26px;line-height:32px;font-weight:700;letter-spacing:-.01em;margin:0 0 12px}
+p{font-size:15px;line-height:22px;color:${COLOR.soft};margin:0 0 24px}
+a{display:inline-flex;align-items:center;min-height:40px;padding:0 18px;border-radius:12px;background:${COLOR.blueFill};color:${COLOR.text};font-size:14px;font-weight:700;text-decoration:none}
+a:hover{background:#005ed2}
+a:focus-visible{outline:2px solid ${COLOR.cyan};outline-offset:2px}`;
 
 /**
  * A small standalone page (404, 403, 500, 401) for responses outside the dashboard layout. Text

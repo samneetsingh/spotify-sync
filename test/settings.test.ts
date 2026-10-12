@@ -23,7 +23,7 @@ const bare = (overrides: Partial<Env> = {}): Env => ({ WRITE_MODE: "live", SETTI
 const row = (key: string, value: unknown) => ({ key, value: JSON.stringify(value) });
 
 describe("resolveSettings", () => {
-  it("starts new owners with everything on except Liked Songs and Hindi Favorites (AI needs a key)", () => {
+  it("starts new owners with everything on except Liked Songs, Hindi Favorites and Advanced (AI needs a key)", () => {
     const { values, source, problems } = resolveSettings([], bare());
     expect(values).toEqual({
       liked: false,
@@ -39,6 +39,7 @@ describe("resolveSettings", () => {
       digestMonthly: true,
       aiEditor: false,
       timeZone: "UTC",
+      advanced: false,
     });
     expect(new Set(Object.values(source))).toEqual(new Set(["default"]));
     expect(problems).toEqual([]);

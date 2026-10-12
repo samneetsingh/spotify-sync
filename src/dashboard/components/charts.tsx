@@ -1,125 +1,164 @@
 // Home's charts, rendered on the server: no client JS and no `style=` attributes (the CSP blocks them),
 // so SVG geometry goes in attributes and colour in classes (styles/home.ts). Every chart has an
-// aria-label summary sentence and a "Show the numbers" table, and never uses colour alone: values are
-// in the tooltips, the labels and the table; the highlighted bar also has a bold axis label.
+// aria-label summary sentence and never uses colour alone: values are in the tooltips, the legend
+// and the labels.
 //
-// ColumnChart uses no viewBox: x positions and widths are percentages of the chart's width and y is in
-// pixels, so text never scales and the 4px rounded bar ends stay round at every width. Tooltips are
-// CSS-only (:hover / :focus-visible on the focusable bar) in a band above the plot.
+// LineChart: x positions are percentages of the chart's width and y is in pixels, so text never
+// scales. The curves themselves are in a stretched viewBox (0..1000 wide, preserveAspectRatio=none)
+// with non-scaling strokes, so they keep an even width at every chart width. Tooltips are CSS-only
+// (:hover / :focus-visible on a focusable target per point, near its lines) and list every year's
+// value and its dots (this year's latest point always has one). The legend
+// (oldest year first) is a row of checkboxes: hovering a year brings its line forward and unticking
+// hides it, through :has() in styles/home.ts; without :has() every line simply stays.
 
 import type { Child } from "hono/jsx";
 import { fmt } from "../../email/layout";
+import { CHART } from "../tokens";
 import { axisNumber, hourName, playsText, WEEKDAYS, WEEKDAYS_SHORT } from "./format";
 
 /** A number for an SVG percentage attribute. */
 const pct = (n: number) => `${Math.round(n * 1000) / 1000}%`;
 
-// ---------------------------------------------------------------------------- numbers table
-
-export interface NumbersProps {
-  /** Column headers; numeric columns are right-aligned. */
-  head: Array<{ label: string; numeric?: boolean }>;
-  /** Rows of cells; the first cell is the row's header. */
-  rows: Array<Array<string | number>>;
-  caption?: string;
-}
-
-/** The "Show the numbers" disclosure every chart carries: a real table of the plotted values. */
-export function Numbers({ head, rows, caption }: NumbersProps) {
-  const num = (i: number) => (head[i]?.numeric ? "num" : undefined);
+/**
+ * The page's shared SVG paint servers, rendered once per page: `#g-area`, the fill under this year's
+ * line (styles/home.ts). Zero-sized but not display:none, which would stop browsers painting with it.
+ */
+export function ChartDefs() {
   return (
-    <details class="numbers">
-      <summary>Show the numbers</summary>
-      <div class="table-wrap">
-        <table>
-          {caption ? <caption class="vh">{caption}</caption> : null}
-          <thead>
-            <tr>
-              {head.map((h, i) => (
-                <th scope="col" class={num(i)}>
-                  {h.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr>
-                {r.map((cell, i) =>
-                  i === 0 ? (
-                    <th scope="row">{cell}</th>
-                  ) : (
-                    <td class={num(i)}>{typeof cell === "number" ? fmt(cell) : cell}</td>
-                  ),
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </details>
+    <svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="g-area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color={CHART.years[0]} stop-opacity="0.32" />
+          <stop offset="1" stop-color={CHART.years[0]} stop-opacity="0" />
+        </linearGradient>
+      </defs>
+    </svg>
   );
 }
 
-// ---------------------------------------------------------------------------- column chart
+// ---------------------------------------------------------------------------- line chart
 
-export interface Column {
-  /** The axis label, e.g. "Mon", "8" or "Oct". */
+export interface LinePoint {
+  /** The axis label, e.g. "Mon", "13" or "Oct". */
   label: string;
-  /** The full name for the tooltip, the bar's label and the table, e.g. "Mon, Oct 6". */
+  /** The tooltip's title and the point's label, e.g. "Mon, Oct 6" or "October". */
   name: string;
-  value: number;
-  /** Today, or the current month: an apricot bar and a bold axis label. */
+  /** Today, or this month: a bold axis label. */
   highlight?: boolean;
-  /** Hasn't happened yet: a hollow stub, not focusable. */
-  future?: boolean;
   /** Show the axis label (default true); e.g. only every 7th day of a month. */
   tick?: boolean;
   /** Hide the axis label on phones (every other month of a year). */
   tickWide?: boolean;
-  /** After the value in the tooltip and the label, e.g. "so far". */
-  note?: string;
 }
 
-export interface ColumnChartProps {
-  columns: Column[];
+export interface LineSeries {
+  /** The legend's and tooltip's name, e.g. "2026". */
+  label: string;
+  /** One value per point; null = nothing to show yet (later this week, month or year). */
+  values: Array<number | null>;
+  /** The legend's total, e.g. "412 plays so far". */
+  total: string;
+}
+
+export interface LineChartProps {
+  /** Unique on the page: the legend's checkbox ids are `<id>-y<k>`. */
+  id: string;
+  points: LinePoint[];
+  /** The first is this year's (bright, filled underneath); the others are drawn thinner behind it. At most CHART.years.length. */
+  series: LineSeries[];
   /** The summary sentence (the chart's aria-label). */
   summary: string;
-  /** The first column's header in the numbers table, e.g. "Day" or "Month". */
-  labelHeader: string;
+  /** After this year's value at a highlighted point, e.g. "so far". */
+  note?: string;
+  /** The chart's height in px (the plot, then the axis labels). */
+  height?: number;
 }
 
-/** Chart geometry in px: a tooltip band, the plot, the axis labels. */
-const H = 212;
-const PLOT_TOP = 52;
-const BASE = 180;
-const LABEL_Y = 202;
-const TIP_W = 148;
-const TIP_H = 42;
+/** Chart geometry in px: the plot starts this far down (tooltips float over its top); the axis labels sit under it. */
+const PLOT_TOP = 24;
+const TIP_W = 172;
+/** How far above and below a point's lines its hover target reaches, in px. */
+const HIT = 20;
+const ROW_H = 18;
+/** The curves' viewBox width (the viewBox is stretched to the chart's width). */
+const VB_W = 1000;
 
-/** Round gridline steps: 0, step, 2*step... reaching `max` in at most 3 steps (1, 2 or 5 x 10^k). */
-export function niceTicks(max: number): number[] {
-  const m = Math.max(1, max);
-  const raw = m / 3;
+/**
+ * The y scale: its top sits just above `max` (8% headroom, so the busiest point nearly fills the
+ * plot), with round gridlines inside it: 0, step, 2*step... at most five, step being 1, 2, 2.5 or
+ * 5 x 10^k (at least 1).
+ */
+export function niceScale(max: number): { top: number; ticks: number[] } {
+  const top = Math.max(1, max) * 1.08;
+  const raw = top / 4;
   const pow = 10 ** Math.floor(Math.log10(raw));
-  const step = Math.max(1, [1, 2, 5, 10].map((s) => s * pow).find((s) => s >= raw)!);
-  const top = Math.ceil(m / step) * step;
-  return Array.from({ length: top / step + 1 }, (_, i) => i * step);
+  const step = Math.max(1, [1, 2, 2.5, 5, 10].map((s) => s * pow).find((s) => Math.floor(top / s) <= 4)!);
+  return { top, ticks: Array.from({ length: Math.floor(top / step) + 1 }, (_, i) => i * step) };
 }
 
-const valueText = (c: Column) => (c.future ? "upcoming" : `${playsText(c.value)}${c.note ? ` ${c.note}` : ""}`);
+const r1 = (n: number) => Math.round(n * 10) / 10;
 
-/** Plays per day or month: focusable bars with CSS tooltips, gridlines, today highlighted, future days hollow. */
-export function ColumnChart({ columns, summary, labelHeader }: ColumnChartProps) {
-  const ticks = niceTicks(Math.max(0, ...columns.map((c) => c.value)));
-  const top = ticks.at(-1)!;
+/**
+ * A smooth path through the points (x ascending): cubic segments with monotone tangents
+ * (Fritsch-Carlson, as d3's curveMonotoneX), so the curve never overshoots a peak or dips below zero
+ * between points.
+ */
+export function smoothPath(pts: Array<[x: number, y: number]>): string {
+  const n = pts.length;
+  if (!n) return "";
+  const x = pts.map((p) => p[0]);
+  const y = pts.map((p) => p[1]);
+  let d = `M${r1(x[0]!)},${r1(y[0]!)}`;
+  if (n === 1) return d;
+  const dx = x.slice(1).map((v, i) => v - x[i]!);
+  const m = dx.map((h, i) => (y[i + 1]! - y[i]!) / h);
+  const t = x.map((_, i) => {
+    if (i === 0) return m[0]!;
+    if (i === n - 1) return m[n - 2]!;
+    const [a, b] = [m[i - 1]!, m[i]!];
+    if (a * b <= 0) return 0;
+    const w1 = 2 * dx[i]! + dx[i - 1]!;
+    const w2 = dx[i]! + 2 * dx[i - 1]!;
+    return (w1 + w2) / (w1 / a + w2 / b);
+  });
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i]! / 3;
+    d += `C${r1(x[i]! + h)},${r1(y[i]! + h * t[i]!)} ${r1(x[i + 1]! - h)},${r1(y[i + 1]! - h * t[i + 1]!)} ${r1(x[i + 1]!)},${r1(y[i + 1]!)}`;
+  }
+  return d;
+}
+
+/** The runs of consecutive non-null values, as [index, value] pairs. */
+function runs(values: Array<number | null>): Array<Array<[number, number]>> {
+  const out: Array<Array<[number, number]>> = [];
+  let run: Array<[number, number]> = [];
+  values.forEach((v, i) => {
+    if (v === null) {
+      if (run.length) out.push(run);
+      run = [];
+    } else run.push([i, v]);
+  });
+  if (run.length) out.push(run);
+  return out;
+}
+
+/** Plays per day or month, one smooth line per year: this year's bright and filled, earlier years thinner behind it. */
+export function LineChart({ id, points, series, summary, note, height = 240 }: LineChartProps) {
+  const H = height;
+  const BASE = H - 32;
+  const LABEL_Y = H - 10;
+  const { top, ticks } = niceScale(Math.max(0, ...series.flatMap((s) => s.values.map((v) => v ?? 0))));
   const y = (v: number) => BASE - (v / top) * (BASE - PLOT_TOP);
-  const n = Math.max(1, columns.length);
+  const n = Math.max(1, points.length);
   const slot = 100 / n;
-  const barW = slot * (n > 20 ? 0.62 : 0.5);
+  const center = (i: number) => (i + 0.5) * slot;
+  const vx = (i: number) => (center(i) / 100) * VB_W;
+  const valueText = (k: number, v: number, p: LinePoint) => `${playsText(v)}${k === 0 && p.highlight && note ? ` ${note}` : ""}`;
+  const now = runs(series[0]?.values ?? []).at(-1)?.at(-1);
+  const tipH = 30 + series.length * ROW_H;
   return (
-    <figure class="chart chart-cols">
-      <div class="cc" role="group" aria-label={summary}>
+    <figure class="chart chart-lines">
+      <div class="lc" role="group" aria-label={summary}>
         <svg class="cc-y" width="44" height={H} aria-hidden="true">
           {ticks.map((t) => (
             <text x="36" y={y(t) + 4} text-anchor="end">
@@ -127,59 +166,91 @@ export function ColumnChart({ columns, summary, labelHeader }: ColumnChartProps)
             </text>
           ))}
         </svg>
-        <svg class="cc-plot" width="100%" height={H}>
-          <g aria-hidden="true">
+        <div class="lc-plot">
+          <svg class="lc-grid" width="100%" height={H} aria-hidden="true">
             {ticks.map((t) => (
               <line class={t === 0 ? "base" : "grid"} x1="0" x2="100%" y1={y(t)} y2={y(t)} />
             ))}
-            {columns.map((c, i) =>
-              c.tick === false ? null : (
-                <text class={`tick${c.highlight ? " is-now" : ""}${c.tickWide ? " tick-wide" : ""}`} x={pct((i + 0.5) * slot)} y={LABEL_Y} text-anchor="middle">
-                  {c.label}
+            {points.map((p, i) =>
+              p.tick === false ? null : (
+                <text class={`tick${p.highlight ? " is-now" : ""}${p.tickWide ? " tick-wide" : ""}`} x={pct(center(i))} y={LABEL_Y} text-anchor="middle">
+                  {p.label}
                 </text>
               ),
             )}
-          </g>
-          {columns.map((c, i) => {
-            const x = pct(i * slot + (slot - barW) / 2);
-            const w = pct(barW);
-            if (c.future) return <rect class="col-future" x={x} y={BASE - 10} width={w} height="10" rx="3" aria-hidden="true" />;
-            const barTop = c.value > 0 ? Math.min(y(c.value), BASE - 3) : BASE - 2;
-            const center = (i + 0.5) * slot;
-            const tipX = center < 16 ? -16 : center > 84 ? -(TIP_W - 16) : -TIP_W / 2;
-            return (
-              <g class={`col${c.highlight ? " is-now" : ""}`} tabindex={0} role="img" aria-label={`${c.name}: ${valueText(c)}`}>
-                <rect class="col-hit" x={pct(i * slot)} y={PLOT_TOP - 8} width={pct(slot)} height={BASE - PLOT_TOP + 14} rx="6" />
-                {c.value > 0 ? (
-                  <>
-                    <rect class="col-bar" x={x} y={barTop} width={w} height={BASE - barTop} rx="4" />
-                    {BASE - barTop > 4 ? <rect class="col-bar" x={x} y={BASE - 4} width={w} height="4" /> : null}
-                  </>
-                ) : (
-                  <rect class="col-zero" x={x} y={BASE - 2} width={w} height="2" />
-                )}
-                <g class="tip" aria-hidden="true">
-                  <line class="tip-guide" x1={pct(center)} x2={pct(center)} y1={TIP_H + 4} y2={barTop - 4} />
-                  <svg x={pct(center)} y="0" width="1" height="1" overflow="visible">
-                    <rect class="tip-box" x={tipX} y="0" width={TIP_W} height={TIP_H} rx="10" />
-                    <text class="tip-name" x={tipX + 12} y="17">
-                      {c.name}
-                    </text>
-                    <text class="tip-value" x={tipX + 12} y="34">
-                      {valueText(c)}
-                    </text>
-                  </svg>
+          </svg>
+          <svg class="lc-lines" width="100%" height={H} viewBox={`0 0 ${VB_W} ${H}`} preserveAspectRatio="none" aria-hidden="true">
+            {runs(series[0]?.values ?? []).map((run) => {
+              const pts = run.map(([i, v]): [number, number] => [vx(i), y(v)]);
+              return run.length > 1 ? <path class="area" d={`${smoothPath(pts)}L${r1(pts.at(-1)![0])},${BASE}L${r1(pts[0]![0])},${BASE}Z`} /> : null;
+            })}
+            {series
+              .map((s, k) => ({ s, k }))
+              .reverse()
+              .flatMap(({ s, k }) =>
+                runs(s.values).map((run) => <path class={`ln ln-${k}`} d={smoothPath(run.map(([i, v]) => [vx(i), y(v)]))} vector-effect="non-scaling-stroke" />),
+              )}
+          </svg>
+          <svg class="lc-points" width="100%" height={H}>
+            {now ? <circle class="dot-now" cx={pct(center(now[0]))} cy={r1(y(now[1]))} r="4.5" aria-hidden="true" /> : null}
+            {points.map((p, i) => {
+              // Oldest year first, like the legend.
+              const rows = series.flatMap((s, k) => (s.values[i] === null || s.values[i] === undefined ? [] : [{ k, label: s.label, v: s.values[i]! }])).reverse();
+              if (!rows.length) return null;
+              const c = center(i);
+              const tipX = c < 50 ? 12 : -(TIP_W + 12);
+              // The hover target: this point's column, but only near its lines (HIT px above the
+              // highest and below the lowest), not the whole height of the plot.
+              const vals = rows.map((r) => r.v);
+              const hitTop = r1(Math.max(PLOT_TOP - 8, y(Math.max(...vals)) - HIT));
+              const hitBottom = r1(Math.min(BASE + 6, y(Math.min(...vals)) + HIT));
+              return (
+                <g class="pt" tabindex={0} role="img" aria-label={`${p.name}: ${rows.map((r) => `${r.label} ${valueText(r.k, r.v, p)}`).join(", ")}`}>
+                  <rect class="pt-hit" x={pct(i * slot)} y={hitTop} width={pct(slot)} height={r1(hitBottom - hitTop)} />
+                  <line class="tip tip-guide" x1={pct(c)} x2={pct(c)} y1={PLOT_TOP - 4} y2={BASE} aria-hidden="true" />
+                  {rows.map((r) => (
+                    <circle class={`dot dot-${r.k}`} cx={pct(c)} cy={r1(y(r.v))} r={r.k === 0 ? "3.5" : "3"} aria-hidden="true" />
+                  ))}
+                  <g class="tip" aria-hidden="true">
+                    <svg x={pct(c)} y="0" width="1" height="1" overflow="visible">
+                      <rect class="tip-box" x={tipX} y="0" width={TIP_W} height={tipH} rx="10" />
+                      <text class="tip-name" x={tipX + 12} y="19">
+                        {p.name}
+                      </text>
+                      {rows.map((r, j) => (
+                        <g class={`row row-${r.k}`}>
+                          <circle class={`dot dot-${r.k}`} cx={tipX + 16} cy={34 + j * ROW_H} r="4" />
+                          <text class="tip-row" x={tipX + 26} y={38 + j * ROW_H}>
+                            {r.label}
+                          </text>
+                          <text class="tip-value" x={tipX + TIP_W - 12} y={38 + j * ROW_H} text-anchor="end">
+                            {`${fmt(r.v)}${r.k === 0 && p.highlight && note ? ` ${note}` : ""}`}
+                          </text>
+                        </g>
+                      ))}
+                    </svg>
+                  </g>
                 </g>
-              </g>
-            );
-          })}
-        </svg>
+              );
+            })}
+          </svg>
+        </div>
       </div>
-      <Numbers
-        caption={summary}
-        head={[{ label: labelHeader }, { label: "Plays", numeric: true }]}
-        rows={columns.map((c) => [c.name, c.future ? "Upcoming" : `${fmt(c.value)}${c.note ? ` (${c.note})` : ""}`])}
-      />
+      <fieldset class="lc-legend">
+        <legend class="vh">Years shown</legend>
+        {series
+          .map((s, k) => ({ s, k }))
+          .reverse()
+          .map(({ s, k }) => (
+            <>
+              <input class={`vh yr yr-${k}`} type="checkbox" id={`${id}-y${k}`} checked />
+              <label class={`lg lg-${k}`} for={`${id}-y${k}`}>
+                <span class={`sw sw-${k}`} aria-hidden="true"></span>
+                <span class="lg-label">{s.label}</span> <span class="lg-total">{s.total}</span>
+              </label>
+            </>
+          ))}
+      </fieldset>
     </figure>
   );
 }
@@ -241,7 +312,7 @@ export interface HeatmapProps {
   summary: string;
 }
 
-/** When you listen: a 7 x 24 grid in 5 levels plus empty, a title on each cell, a legend and the table. */
+/** When you listen: a 7 x 24 grid in 5 levels plus empty, a title on each cell and a legend. */
 export function Heatmap({ grid, summary }: HeatmapProps) {
   const max = Math.max(0, ...grid.flat());
   const cellTitle = (d: number, h: number, n: number) => `${WEEKDAYS[d]}, ${hourName(h)}–${hourName((h + 1) % 24)}: ${playsText(n)}`;
@@ -271,11 +342,6 @@ export function Heatmap({ grid, summary }: HeatmapProps) {
           <span class="hc l0"></span> None
         </span>
       </div>
-      <Numbers
-        caption={summary}
-        head={[{ label: "Day" }, ...Array.from({ length: 24 }, (_, h) => ({ label: hourName(h), numeric: true })), { label: "Total", numeric: true }]}
-        rows={grid.map((row, d) => [WEEKDAYS[d]!, ...row, row.reduce((a, b) => a + b, 0)])}
-      />
     </figure>
   );
 }

@@ -1,8 +1,8 @@
 // The TSX primitives every dashboard page builds on: their markup (the shared CSS classes), escaping
-// of every text prop, and the Switch / Chip / Row markup the pages rely on.
+// of every text prop, and the Chip / Row markup the pages rely on.
 
 import { describe, expect, it } from "vitest";
-import { Card, Chip, Facts, LinkButton, Notice, Pill, PostButton, Row, Rows, Switch } from "../../src/dashboard/components/primitives";
+import { Card, Chip, Facts, LinkButton, Notice, Pill, PostButton, Row, Rows } from "../../src/dashboard/components/primitives";
 import { raw, render } from "../../src/dashboard/render";
 
 const XSS = `<script>alert("x")</script>`;
@@ -69,27 +69,6 @@ describe("Rows and Row", () => {
       `<ul class="rows"><li><div class="main"><h3>${ESCAPED}</h3><div class="row-actions"><form class="inline" method="post" action="/a"><button type="submit" class="btn btn-secondary btn-small">Recreate</button></form></div></div><div class="side"><span class="pill pill-ok">On</span></div></li>` +
         `<li><div class="main">plain</div></li></ul>`,
     );
-  });
-});
-
-describe("Switch", () => {
-  it("posts the opposite state of one key to /settings/toggle", () => {
-    expect(render(<Switch setting="digestWeekly" label="Weekly digest" on />)).toBe(
-      `<form class="inline" method="post" action="/settings/toggle"><input type="hidden" name="key" value="digestWeekly"/><input type="hidden" name="value" value="false"/>` +
-        `<button type="submit" class="switch" role="switch" aria-checked="true"><span class="switch-label">Weekly digest</span> <span class="switch-state" aria-hidden="true">On</span></button></form>`,
-    );
-    const off = render(<Switch setting="frequent" label="Frequent plays" on={false} />);
-    expect(off).toContain(`<input type="hidden" name="value" value="true"/>`);
-    expect(off).toContain(`aria-checked="false"`);
-    expect(off).toContain(`<span class="switch-state" aria-hidden="true">Off</span>`);
-  });
-
-  it("can be disabled and described, and escapes its text", () => {
-    const out = render(<Switch setting={`a"b`} label={XSS} on={false} disabled describedBy="s-liked-desc" />);
-    expect(out).toContain(`value="a&quot;b"`);
-    expect(out).toContain(`aria-describedby="s-liked-desc" disabled=""`);
-    expect(out).toContain(`<span class="switch-label">${ESCAPED}</span>`);
-    expect(render(<Switch setting="x" label="X" on disabled={false} describedBy="" />)).not.toMatch(/disabled|aria-describedby/);
   });
 });
 

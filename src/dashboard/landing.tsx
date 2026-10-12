@@ -10,13 +10,8 @@ import { LinkButton } from "./components/primitives";
 import { renderPage, type Notice } from "./layout";
 import { render } from "./render";
 
-/** The record from the digest emails with an apricot label, on a soft glow: decorative. */
-const Disc = () => (
-  <div class="disc" aria-hidden="true">
-    <span class="disc-label"></span>
-    <img src="/email/vinyl.png?v=1" alt="" width="216" height="216" />
-  </div>
-);
+/** The app's mark above the title (main.narrow puts it first): decorative. */
+const Mark = () => <span class="landing-mark" aria-hidden="true"></span>;
 
 export type LandingState = "owned" | "unclaimed" | "unconfigured";
 
@@ -30,7 +25,7 @@ function LandingBody({ state }: { state: LandingState }) {
   if (state === "owned") {
     return (
       <>
-        <Disc />
+        <Mark />
         <p class="lead">Playlists, Liked Songs and listening digests, built from what you play on Spotify.</p>
         <LinkButton href="/login" label="Log in with Spotify" variant="primary" />
         <p class="note">Only the owner's Spotify account can log in.</p>
@@ -40,7 +35,7 @@ function LandingBody({ state }: { state: LandingState }) {
   if (state === "unclaimed") {
     return (
       <>
-        <Disc />
+        <Mark />
         <p class="lead">We emailed a setup link to the owner. Open it to connect Spotify and finish setting up.</p>
         <form method="post" action="/claim/resend">
           <button type="submit" class="btn btn-secondary">
@@ -53,7 +48,7 @@ function LandingBody({ state }: { state: LandingState }) {
   }
   return (
     <>
-      <Disc />
+      <Mark />
       <p class="lead">The developer still needs to finish setup. Check back soon.</p>
     </>
   );

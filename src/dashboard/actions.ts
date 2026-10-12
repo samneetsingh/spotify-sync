@@ -1,5 +1,5 @@
 // Owner actions (POST, Origin-checked by the router): sync now, digest previews, recreate a
-// playlist that was deleted in Spotify. Each logs to `activity` and redirects back to /manage with a
+// playlist that was deleted in Spotify. Each logs to `activity` and redirects back to /settings with a
 // fixed flash code (no user content in URLs): post/redirect/get.
 
 import { logActivity } from "../activity";
@@ -21,8 +21,8 @@ export const PREVIEW_COOLDOWN_MS = 10 * 60_000;
 export const previewKey = (kind: DigestKind) => `preview:${kind}`;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
-/** The actions live on /manage, which shows the flash message. */
-const back = (code: string, ok = true) => redirect303(`/manage?${ok ? "ok" : "error"}=${code}`);
+/** The actions live on /settings, which shows the flash message. */
+const back = (code: string, ok = true) => redirect303(`/settings?${ok ? "ok" : "error"}=${code}`);
 
 /** POST /actions/sync: runs the sync job inline (with its alerting), unless one is already running. */
 export async function syncNow(env: Env, now = Date.now()): Promise<Response> {

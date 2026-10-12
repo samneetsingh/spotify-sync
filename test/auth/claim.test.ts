@@ -373,6 +373,7 @@ describe("account emails", () => {
     digestMonthly: false,
     aiEditor: false,
     timeZone: "America/Los_Angeles",
+    advanced: false,
   };
 
   it("claim: the host, a button that works once for 7 days, and a reassuring note", () => {

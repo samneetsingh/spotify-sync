@@ -3,11 +3,10 @@
 import { env } from "cloudflare:workers";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ART_KEY } from "../../src/dashboard/art";
-import { bestDay, dayBars, loadHome, localDays, monthBars, monthDates, soFarRanges, STREAK_DAYS, streak, weekDates, type HomeData } from "../../src/dashboard/home-data";
-import { nextDigestRun, periodLabel } from "../../src/dashboard/next-digest";
+import { bestDay, dayBars, loadHome, localDays, recentDates, soFarRanges, STREAK_DAYS, streak, trendLines, trendSpans, weekDates, type HomeData } from "../../src/dashboard/home-data";
 import { migrate } from "../../src/db/schema";
 import { setState } from "../../src/db/state";
-import { LAST_DIGEST_KEY } from "../../src/jobs/digest";
+import { formatDate } from "../../src/utils/time";
 import { resetDb } from "../parity/spotify-fixture";
 import { seed } from "../jobs/digest-helpers";
 
@@ -79,15 +78,23 @@ describe("loadHome", () => {
     expect(h.days.week.map((b) => b.date)).toEqual(["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"]);
     expect(playsOf(h.days.week)).toEqual([1, 1, 1, 0, 0, 0, 0]);
     expect(h.days.week.map((b) => b.future)).toEqual([false, false, false, true, true, true, true]);
-    expect(h.days.month).toHaveLength(31);
-    expect(h.days.month.filter((b) => b.plays).map((b) => [b.date, b.plays])).toEqual([
-      ["2026-10-02", 1], ["2026-10-03", 1], ["2026-10-06", 1], ["2026-10-07", 2], ["2026-10-12", 1], ["2026-10-13", 1], ["2026-10-14", 1],
+    // The listening lines. Week: only this year (the same weeks in earlier years have no plays), the
+    // days after today still to come.
+    expect(h.trends.week.x).toEqual(h.days.week.map((b) => b.date));
+    expect(h.trends.week.lines).toEqual([{ year: 2026, plays: [1, 1, 1, null, null, null, null] }]);
+    // The last 30 days (Sep 15 to Oct 14; the Sep 2 play is before it) and the same dates in 2025.
+    expect([h.trends.month.x.length, h.trends.month.x[0], h.trends.month.x.at(-1)]).toEqual([30, "2026-09-15", "2026-10-14"]);
+    const monthPlays = (k: number) => h.trends.month.x.flatMap((d, i) => (h.trends.month.lines[k]!.plays[i] ? [[d.slice(5), h.trends.month.lines[k]!.plays[i]]] : []));
+    expect(h.trends.month.lines.map((l) => l.year)).toEqual([2026, 2025]);
+    expect(monthPlays(0)).toEqual([["10-02", 1], ["10-03", 1], ["10-06", 1], ["10-07", 2], ["10-12", 1], ["10-13", 1], ["10-14", 1]]);
+    expect(monthPlays(1)).toEqual([["09-28", 1], ["09-29", 1], ["09-30", 1]]); // 2025's plays on the same dates
+    // The calendar year: 2026 so far (November and December to come) and 2025; earlier years have nothing.
+    expect(h.trends.year.x).toEqual(["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]);
+    expect(h.trends.year.lines).toEqual([
+      { year: 2026, plays: [0, 0, 0, 0, 0, 0, 0, 0, 1, 8, null, null] },
+      { year: 2025, plays: [0, 0, 0, 0, 0, 0, 0, 0, 3, 2, 0, 0] },
     ]);
-    expect(h.days.month.filter((b) => b.future).map((b) => b.date)).toEqual(localDays(date("2026-10-15"), date("2026-10-31")).map((d) => `2026-10-${String(d.day).padStart(2, "0")}`));
-    // Nov 2025 to Oct 2026: the October 2025 throwback plays are before the chart.
-    expect(h.days.year.map((m) => m.month)).toEqual(["2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]);
-    expect(playsOf(h.days.year)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 8]);
-    expect(h.days.year.map((m) => m.current)).toEqual([...Array(11).fill(false), true]);
+    expect(h.anyPlays).toBe(true);
     expect(h.streak).toBe(3);
     expect(h.bestDay).toEqual({ date: "2026-10-07", plays: 2 });
 
@@ -100,16 +107,13 @@ describe("loadHome", () => {
     expect(h.hours.grid[2]![9]).toBe(2); // Wednesdays at 9 AM: Oct 7 and Oct 14
   });
 
-  it("reads the status, the latest digest, the next sends and the art cache, never the token's value", async () => {
+  it("reads the status and the art cache, never the token's value", async () => {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO sync_runs(started_at, finished_at, status, plays_fetched) VALUES('2026-10-14 16:40:00', '2026-10-14 16:40:05', 'success', 4)"),
       env.DB.prepare("INSERT INTO sync_runs(started_at, finished_at, status, error) VALUES('2026-10-14 16:50:00', '2026-10-14 16:50:02', 'fail', 'boom')"),
       env.DB.prepare("INSERT INTO state(key, value) VALUES('alert_failing:sync', ?1), ('alert_failing:weekly-digest', ?2), ('alert_failingX', 'not a failure')")
         .bind(JSON.stringify({ since: NOW - 600_000, failures: 2, lastError: "boom" }), JSON.stringify({ since: NOW - DAY })),
-      env.DB.prepare("INSERT INTO state(key, value) VALUES('recap:last_week', '2026-W41'), ('recap:last_month', '2026-09')"),
     ]);
-    const last = { kind: "week", subject: "Your week in music, Oct 5 to Oct 11: 9 plays", period: "Oct 5 to Oct 11", sentAt: NOW - 3 * DAY };
-    await setState(env.DB, LAST_DIGEST_KEY, JSON.stringify(last));
     await setState(env.DB, ART_KEY, JSON.stringify({ at: NOW - DAY, art: { s: "https://i.scdn.co/image/s", n: "", bad: "javascript:alert(1)" } }));
 
     const h = await load(NOW);
@@ -120,25 +124,17 @@ describe("loadHome", () => {
       { job: "weekly-digest", since: NOW - DAY, failures: 1, lastError: null },
       { job: "sync", since: NOW - 600_000, failures: 2, lastError: "boom" },
     ]);
-    expect(h.digests.last).toEqual(last);
-    const week = nextDigestRun("week", NOW, LA, "2026-W41")!;
-    const month = nextDigestRun("month", NOW, LA, "2026-09")!;
-    expect(h.digests.next).toEqual({ week: { at: week.at, period: periodLabel(week.period) }, month: { at: month.at, period: periodLabel(month.period) } });
-    expect(h.digests.next.week).toEqual({ at: Date.parse("2026-10-19T08:05:00Z"), period: "Oct 12–18" });
-    expect(h.digests.next.month).toEqual({ at: Date.parse("2026-11-01T08:05:00Z"), period: "October 2026" });
     expect(h.art).toEqual({ s: "https://i.scdn.co/image/s", n: "" });
     expect(JSON.stringify(h)).not.toContain("test-refresh");
 
-    // Not connected, a stale art cache, a malformed digest:last.
+    // Not connected, a stale art cache.
     await env.DB.batch([
       env.DB.prepare("DELETE FROM state WHERE key = 'spotify_refresh_token'"),
       env.DB.prepare("UPDATE state SET value = ?1 WHERE key = ?2").bind(JSON.stringify({ at: NOW - 8 * DAY, art: { s: "https://i.scdn.co/image/s" } }), ART_KEY),
-      env.DB.prepare(`UPDATE state SET value = '{"kind":"year"}' WHERE key = ?1`).bind(LAST_DIGEST_KEY),
     ]);
     const after = await load(NOW);
     expect(after.status.connected).toBe(false);
     expect(after.art).toEqual({});
-    expect(after.digests.last).toBeNull();
   });
 
   it("is one db.batch and no other query, with a handful of bound parameters per statement", async () => {
@@ -163,9 +159,9 @@ describe("loadHome", () => {
 
     const h = await loadHome(db, { now: NOW, timeZone: LA });
     expect(h.month.current.plays).toBe(8);
-    expect(batches).toEqual([26]);
+    expect(batches).toEqual([27]);
     expect(single).toBe(0);
-    expect(binds.length).toBe(24); // every statement but the two sync_runs reads
+    expect(binds.length).toBe(25); // every statement but the two sync_runs reads
     expect(Math.max(...binds)).toBeLessThanOrEqual(7);
     await db.prepare("SELECT 1").first(); // the watcher does see a query outside the batch
     expect(single).toBe(1);
@@ -184,12 +180,10 @@ describe("loadHome", () => {
     expect(h.streak).toBe(0);
     expect(h.bestDay).toBeNull();
     expect(playsOf(h.days.week)).toEqual(Array(7).fill(0));
-    expect(playsOf(h.days.month)).toEqual(Array(31).fill(0));
-    expect(playsOf(h.days.year)).toEqual(Array(12).fill(0));
+    expect(h.trends.month.lines).toEqual([{ year: 2026, plays: Array(30).fill(0) }]);
+    expect(h.trends.year.lines).toEqual([{ year: 2026, plays: [...Array(10).fill(0), null, null] }]);
+    expect(h.anyPlays).toBe(false);
     expect(h.hours.grid).toEqual(Array.from({ length: 7 }, () => Array(24).fill(0)));
-    expect(h.digests.last).toBeNull();
-    expect(h.digests.next.week).not.toBeNull();
-    expect(h.digests.next.month).not.toBeNull();
     expect(h.art).toEqual({});
   });
 
@@ -231,8 +225,8 @@ describe("loadHome", () => {
     expect(h.month.current.plays).toBe(4);
     expect(playsOf(h.days.week)).toEqual([1, 0, 1, 0, 0, 0, 0]);
     expect(h.days.week.map((b) => b.future)).toEqual([false, false, false, true, true, true, true]);
-    expect(h.days.month.filter((b) => b.plays).map((b) => b.date)).toEqual(["2026-10-01", "2026-10-11", "2026-10-12", "2026-10-14"]);
-    expect(playsOf(h.days.year).slice(-2)).toEqual([1, 4]);
+    expect(h.trends.month.x.filter((_, i) => h.trends.month.lines[0]!.plays[i])).toEqual(["2026-09-30", "2026-10-01", "2026-10-11", "2026-10-12", "2026-10-14"]);
+    expect(h.trends.year.lines[0]!.plays.slice(8, 10)).toEqual([1, 4]); // September, October (IST)
     expect(h.streak).toBe(1);
     expect(h.hours.grid[0]![0]).toBe(1); // Monday 00:10
     expect(h.hours.grid[2]![1]).toBe(1); // Wednesday 01:30
@@ -281,7 +275,8 @@ describe("loadHome", () => {
     ]);
     const h = await load(Date.parse("2026-03-15T19:00:00Z"));
     expect(h.bestDay).toEqual({ date: "2026-01-05", plays: 3 }); // the earlier of two equal days
-    expect(playsOf(h.days.year).slice(8, 11)).toEqual([5, 3, 3]); // Dec, Jan, Feb
+    expect(h.trends.year.lines[0]!.plays.slice(0, 2)).toEqual([3, 3]); // Jan, Feb
+    expect(h.trends.year.lines[1]!.plays[11]).toBe(5); // last December, on 2025's line
   });
 
   it("takes throwbacks from the whole calendar month in local time", async () => {
@@ -338,7 +333,8 @@ describe("day helpers", () => {
     expect(localDays(date("2026-01-02"), date("2026-01-01"))).toEqual([]);
     expect(weekDates(date("2026-11-01")).map((d) => `${d.month}/${d.day}`)).toEqual(["10/26", "10/27", "10/28", "10/29", "10/30", "10/31", "11/1"]); // a Sunday
     expect(weekDates(date("2026-10-12"))[0]).toEqual(date("2026-10-12")); // a Monday
-    expect(monthDates(date("2028-02-10"))).toHaveLength(29);
+    const recent = recentDates(date("2028-03-10")).map((d) => `${d.month}/${d.day}`);
+    expect([recent.length, recent[0], recent.at(-1)]).toEqual([30, "2/10", "3/10"]); // across a leap February
   });
 
   it("flags future days and fills missing ones with zero", () => {
@@ -351,17 +347,28 @@ describe("day helpers", () => {
     ]);
   });
 
-  it("sums months, oldest first, the current one so far", () => {
-    const daily = [
-      { date: date("2025-11-30"), plays: 2 },
-      { date: date("2026-01-01"), plays: 1 },
-      { date: date("2026-01-31"), plays: 1 },
-      { date: date("2026-10-14"), plays: 5 },
-    ];
-    const bars = monthBars(daily, date("2026-10-14"));
-    expect(bars.map((b) => `${b.month}:${b.plays}${b.current ? "*" : ""}`)).toEqual([
-      "2025-11:2", "2025-12:0", "2026-01:2", "2026-02:0", "2026-03:0", "2026-04:0", "2026-05:0", "2026-06:0", "2026-07:0", "2026-08:0", "2026-09:0", "2026-10:5*",
-    ]);
+  it("lines the listening charts up by weekday (week), by date (month) and by month (year), five years deep", () => {
+    const spans = trendSpans(date("2028-03-01")); // a Wednesday in a leap year
+    const first = (k: number, chart: keyof typeof spans) => formatDate(spans[chart].spans[k]![0]![0]);
+    expect(spans.week.spans).toHaveLength(5);
+    expect([first(0, "week"), first(1, "week"), first(4, "week")]).toEqual(["2028-02-28", "2027-03-01", "2024-03-04"]); // Mondays, 364 days apart
+    expect(spans.month.x[0]).toBe("2028-02-01");
+    const feb29 = spans.month.x.indexOf("2028-02-29");
+    expect(formatDate(spans.month.spans[1]![feb29]![0])).toBe("2027-02-28"); // no Feb 29 in 2027
+    expect(formatDate(spans.month.spans[4]![feb29]![0])).toBe("2024-02-29"); // 2024 has one
+    expect(spans.year.spans[4]!.map(([from]) => formatDate(from).slice(0, 7))[0]).toBe("2024-01");
+    expect(formatDate(spans.year.spans[0]![11]![1])).toBe("2029-01-01"); // December ends on Jan 1
+  });
+
+  it("makes lines from counts: this year's later points are null, an earlier year without plays is left out", () => {
+    const today = date("2026-10-14");
+    const spans = trendSpans(today).year.spans;
+    const counts = spans.flatMap((year, k) => year.map((_, m) => (k === 2 ? 0 : m + 1)));
+    const lines = trendLines(spans, counts, today);
+    expect(lines.map((l) => l.year)).toEqual([2026, 2025, 2023, 2022]); // 2024 had nothing
+    expect(lines[0]!.plays).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, null, null]);
+    expect(lines[1]!.plays.at(-1)).toBe(12);
+    expect(trendLines(spans, spans.flat().map(() => 0), today)).toEqual([{ year: 2026, plays: [...Array(10).fill(0), null, null] }]); // this year always shows
   });
 
   it("counts streaks ending today or yesterday", () => {

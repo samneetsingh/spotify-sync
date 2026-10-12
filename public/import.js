@@ -1,4 +1,4 @@
-// The Import page's uploader (the dashboard's only JavaScript; src/import/page.ts, routes.ts).
+// The Import page's uploader (src/import/page.tsx, routes.ts).
 // Sends each chosen file to R2 through the Worker as a multipart upload in fixed-size parts,
 // retrying each part, then starts the import. If the tab closes, choosing the files again starts
 // over (R2 drops abandoned multipart uploads after 7 days). The helpers are exported for tests.
