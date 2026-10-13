@@ -7,7 +7,7 @@ spotify-sync started as a Python CLI on a home server: Docker, `crond` running a
 - **One Worker, several cron triggers.** `scheduled()` dispatches on the exact cron string (same UTC times as the old crontab). Every job runs inside `withJob`: migrations, alerting and a D1 query count.
 - **Same schema, same data.** D1 got the Python schema unchanged. Its baseline migration (v7) equals Python's last version and records versions 1-7 as applied, so a `wrangler d1 export` can still be loaded by the old app (the rollback path). Worker-only changes start at v8.
 - **State in D1, not on disk.** The refresh token moved from a JSON cache file to the `state` table, so the Worker can save rotated tokens itself. At the port, a local script (`npm run token`) ran the browser login once and seeded it; today the dashboard's "Log in with Spotify" does it (the script remains as an optional CLI login).
-- **A thin fetch-based Spotify client** instead of an SDK: token refresh, one retry on 429 (honouring `Retry-After`), 401 and 5xx, and write gating in one place.
+- **A thin fetch-based Spotify client** instead of an SDK: token refresh, one retry on 429 (honouring `Retry-After`) and 401, 5xx retries (one quick retry; the daily jobs wait 5 s, 30 s and 60 s), and write gating in one place.
 - **Config** went from `.env`/`config.yaml` to Worker vars and secrets; the Worker's vars are now a template filled per deployment (`npm run configure`). Later, everything an owner chooses moved to dashboard settings in D1, leaving the vars to infrastructure.
 - **Dropped:** file permissions, rotating log files (Workers Logs instead), Docker, the SSH scripts. Local-only tools (OAuth login, privacy-export import) became Node scripts that reach D1 through `wrangler d1 execute`.
 
