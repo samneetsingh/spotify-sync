@@ -14,7 +14,7 @@ import { HINDI_PLAYLIST } from "./jobs/hindi-favorites";
 import { playlistStateKey } from "./jobs/owned-playlists";
 import { FREQUENT_PLAYLIST } from "./jobs/sync";
 import { displayValue, hasLegacyVars, loadSettings, resolveSettings, SETTING_KEYS, settingDef, withoutLegacyVars, type SettingValues } from "./settings";
-import { SpotifyClient } from "./spotify/client";
+import { DAILY_RETRY, QUICK_RETRY, SpotifyClient } from "./spotify/client";
 
 export { DISABLED, isDisabled, type Disabled };
 
@@ -72,7 +72,9 @@ export async function withJob<T>(env: Env, job: string, fn: Job<T>): Promise<T> 
     const alerts = alertConfig(env, settings);
     if (job === "sync") await quietly("sync gap check", () => checkSyncGap(db, alerts));
     const config = loadConfig(env, settings);
-    const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, db, config.writeMode);
+    // Every job but sync runs once a day, so it waits out a short Spotify outage; the sync (also run
+    // from dashboard requests) keeps the quick retry, as its next run is 10 minutes away.
+    const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, db, config.writeMode, job === "sync" ? QUICK_RETRY : DAILY_RETRY);
     const result = await fn(config, db, sp);
     if (isDisabled(result)) {
       // Switched off: forget an old failure without a misleading "recovered" email.

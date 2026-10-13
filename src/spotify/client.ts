@@ -15,9 +15,25 @@ import { refreshAccessToken } from "./auth";
 import { getState, setState } from "../db/state";
 
 const API_BASE = "https://api.spotify.com/v1";
+/** Retries of a 429 or 401; a 5xx follows the client's RetryPolicy. */
 const MAX_RETRIES = 1;
-const RETRY_DELAY_MS = 1000;
 const MAX_RETRY_AFTER_S = 30;
+
+/** How a client retries a 5xx from Spotify. */
+export interface RetryPolicy {
+  /** The wait before each retry, one entry per retry. */
+  delaysMs: readonly number[];
+  /** The most this client waits across all its retries; past it, a 5xx fails at once. */
+  budgetMs: number;
+}
+
+/** The default (dashboard requests, the import Workflow, scripts) and the 10-minute sync, whose next run is the real retry. */
+export const QUICK_RETRY: RetryPolicy = { delaysMs: [1_000], budgetMs: Infinity };
+/**
+ * Daily jobs get one run a day, so they wait out a short outage: about 1.5 min per request, at
+ * most 2 min per job (the daily cron runs four jobs in one 15-minute invocation).
+ */
+export const DAILY_RETRY: RetryPolicy = { delaysMs: [5_000, 30_000, 60_000], budgetMs: 120_000 };
 
 export interface SpotifyAction {
   action: "addToPlaylist" | "replacePlaylistItems" | "addToLikedSongs" | "createPlaylist" | "unfollowPlaylist";
@@ -32,12 +48,15 @@ export class SpotifyClient {
   private tokenRefresh: Promise<string> | null = null;
   private readonly spotifyWritesEnabled: boolean;
   private actions: SpotifyAction[] = [];
+  /** Time spent waiting before 5xx retries, against `retry.budgetMs`. */
+  private retryWaitMs = 0;
 
   constructor(
     private readonly clientId: string,
     private readonly clientSecret: string,
     private readonly db: D1Database,
     writeMode: WriteMode,
+    readonly retry: RetryPolicy = QUICK_RETRY,
   ) {
     this.spotifyWritesEnabled = writeMode === "live";
   }
@@ -81,6 +100,7 @@ export class SpotifyClient {
     url: string,
     init: RequestInit = {},
     retryCount = 0,
+    serverRetries = 0,
   ): Promise<Response> {
     const token = await this.ensureToken();
     const headers = new Headers(init.headers);
@@ -95,7 +115,7 @@ export class SpotifyClient {
       );
       if (retryCount < MAX_RETRIES) {
         await sleep(retryAfter * 1000);
-        return this.request(url, init, retryCount + 1);
+        return this.request(url, init, retryCount + 1, serverRetries);
       }
       const body = await resp.text();
       throw new RateLimitError(retryAfter, body);
@@ -104,12 +124,18 @@ export class SpotifyClient {
     if (resp.status === 401 && retryCount < MAX_RETRIES) {
       this.accessToken = null;
       this.tokenExpiresAt = 0;
-      return this.request(url, init, retryCount + 1);
+      return this.request(url, init, retryCount + 1, serverRetries);
     }
 
-    if (resp.status >= 500 && retryCount < MAX_RETRIES) {
-      await sleep(RETRY_DELAY_MS);
-      return this.request(url, init, retryCount + 1);
+    if (resp.status >= 500) {
+      const method = init.method ?? "GET";
+      const wait = this.serverRetryWait(method, serverRetries);
+      if (wait !== null) {
+        console.warn(JSON.stringify({ spotifyRetry: `${method} ${new URL(url).pathname}`, status: resp.status, retry: serverRetries + 1, waitMs: wait }));
+        await resp.body?.cancel(); // don't hold the connection open while waiting
+        await sleep(wait);
+        return this.request(url, init, retryCount, serverRetries + 1);
+      }
     }
 
     if (!resp.ok) {
@@ -122,6 +148,16 @@ export class SpotifyClient {
     }
 
     return resp;
+  }
+
+  /** The wait before retry number `retries + 1` of a 5xx, or null to give up. */
+  private serverRetryWait(method: string, retries: number): number | null {
+    // A POST (add tracks, create a playlist) isn't idempotent: a 5xx after Spotify applied it would
+    // add the tracks or the playlist again on each retry, so it keeps the single retry it always had.
+    const delay = method === "POST" && retries >= 1 ? undefined : this.retry.delaysMs[retries];
+    if (delay === undefined || this.retryWaitMs + delay > this.retry.budgetMs) return null;
+    this.retryWaitMs += delay;
+    return delay;
   }
 
   private async get<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {

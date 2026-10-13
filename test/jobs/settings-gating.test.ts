@@ -14,7 +14,7 @@ import { runSync, runSyncFull } from "../../src/jobs/sync";
 import { alertConfig, editorConfig, emailConfig, importLegacyConfig, LEGACY_IMPORTED_KEY, withJob } from "../../src/runtime";
 import { DAILY_CRON, runScheduled, SYNC_CRON } from "../../src/schedule";
 import { loadSettings, resolveSettings, withoutLegacyVars, type SettingValues } from "../../src/settings";
-import { SpotifyClient } from "../../src/spotify/client";
+import { DAILY_RETRY, QUICK_RETRY, SpotifyClient } from "../../src/spotify/client";
 import { mockSpotify, resetDb, type Call } from "../parity/spotify-fixture";
 
 type Sent = { subject: string; text?: string };
@@ -126,6 +126,12 @@ describe("withJob", () => {
       "Weekly digest for 2026-W41: sent",
       "Artist playlists: artists processed 2, playlists created 1",
     ]);
+  });
+
+  it("daily jobs wait out a Spotify outage; the 10-minute sync keeps the quick retry", async () => {
+    expect(await withJob(testEnv(), "artist-playlists", async (_c, _db, sp) => sp.retry)).toBe(DAILY_RETRY);
+    expect(await withJob(testEnv(), "weekly-digest", async (_c, _db, sp) => sp.retry)).toBe(DAILY_RETRY);
+    expect(await withJob(testEnv(), "sync", async (_c, _db, sp) => sp.retry)).toBe(QUICK_RETRY);
   });
 
   it("email, alert and editor configs follow the settings", () => {
