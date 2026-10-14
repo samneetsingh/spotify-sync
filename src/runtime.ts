@@ -14,7 +14,7 @@ import { HINDI_PLAYLIST } from "./jobs/hindi-favorites";
 import { playlistStateKey } from "./jobs/owned-playlists";
 import { FREQUENT_PLAYLIST } from "./jobs/sync";
 import { displayValue, hasLegacyVars, loadSettings, resolveSettings, SETTING_KEYS, settingDef, withoutLegacyVars, type SettingValues } from "./settings";
-import { DAILY_RETRY, QUICK_RETRY, SpotifyClient } from "./spotify/client";
+import { QUICK_RETRY, SpotifyClient, type RetryPolicy } from "./spotify/client";
 
 export { DISABLED, isDisabled, type Disabled };
 
@@ -58,11 +58,12 @@ export const editorConfig = (env: Env, settings: Pick<SettingValues, "aiEditor">
 
 /**
  * Runs one job: migrations, the legacy import, one settings read (D1), then the job with its
- * Config; emails on failure/recovery (unless the `alerts` setting is off), logs the outcome to the
+ * Config and a Spotify client that retries a 5xx per `retry` (`runScheduled` picks it per cron);
+ * emails on failure/recovery (unless the `alerts` setting is off), logs the outcome to the
  * activity log (except the 10-minute sync, which has sync_runs), and logs its D1 query count
  * (limit: 1,000 per invocation). A job that returns DISABLED only has its failure state cleared.
  */
-export async function withJob<T>(env: Env, job: string, fn: Job<T>): Promise<T> {
+export async function withJob<T>(env: Env, job: string, fn: Job<T>, retry: RetryPolicy = QUICK_RETRY): Promise<T> {
   const { db, queries } = countingD1(env.DB);
   let settings = deployLayer(env); // until D1 answers, so a failure still alerts
   try {
@@ -72,9 +73,7 @@ export async function withJob<T>(env: Env, job: string, fn: Job<T>): Promise<T> 
     const alerts = alertConfig(env, settings);
     if (job === "sync") await quietly("sync gap check", () => checkSyncGap(db, alerts));
     const config = loadConfig(env, settings);
-    // Every job but sync runs once a day, so it waits out a short Spotify outage; the sync (also run
-    // from dashboard requests) keeps the quick retry, as its next run is 10 minutes away.
-    const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, db, config.writeMode, job === "sync" ? QUICK_RETRY : DAILY_RETRY);
+    const sp = new SpotifyClient(env.SPOTIFY_CLIENT_ID, env.SPOTIFY_CLIENT_SECRET, db, config.writeMode, retry);
     const result = await fn(config, db, sp);
     if (isDisabled(result)) {
       // Switched off: forget an old failure without a misleading "recovered" email.

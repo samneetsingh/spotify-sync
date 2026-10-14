@@ -70,13 +70,13 @@ describe("SpotifyClient", () => {
 
     it("retries a GET once per delay and returns the first good response", async () => {
       const calls = spotify([502, 503, 500]);
-      expect(await client({ delaysMs: [1, 1, 1], budgetMs: Infinity }).getMe()).toEqual({ id: "me" });
+      expect(await client({ delaysMs: [1, 1, 1], budgetMs: Infinity, fallbackMs: 1 }).getMe()).toEqual({ id: "me" });
       expect(calls).toEqual(["GET /v1/me", "GET /v1/me", "GET /v1/me", "GET /v1/me"]);
     });
 
     it("gives up after the last delay with the last 5xx", async () => {
       const calls = spotify([502, 502, 502]);
-      const err = await client({ delaysMs: [1, 1], budgetMs: Infinity }).getMe().catch((e: unknown) => e);
+      const err = await client({ delaysMs: [1, 1], budgetMs: Infinity, fallbackMs: 1 }).getMe().catch((e: unknown) => e);
       expect(err).toBeInstanceOf(SpotifyError);
       expect(err).toMatchObject({ status: 502, body: "error code: 502" });
       expect(calls).toHaveLength(3);
@@ -84,22 +84,24 @@ describe("SpotifyClient", () => {
 
     it("retries a POST only once: Spotify may have applied it", async () => {
       const calls = spotify([502, 502]);
-      await expect(client({ delaysMs: [1, 1, 1], budgetMs: Infinity }).addToPlaylist("p1", ["spotify:track:a"])).rejects.toMatchObject({ status: 502 });
+      await expect(client({ delaysMs: [1, 1, 1], budgetMs: Infinity, fallbackMs: 1 }).addToPlaylist("p1", ["spotify:track:a"])).rejects.toMatchObject({ status: 502 });
       expect(calls).toEqual(["POST /v1/playlists/p1/tracks", "POST /v1/playlists/p1/tracks"]);
     });
 
-    it("stops retrying once the client's budget is spent, across requests", async () => {
-      const calls = spotify([502, 502, 502]);
-      const sp = client({ delaysMs: [5, 5, 5], budgetMs: 7 });
+    it("past the client's budget, across requests, each request still gets one quick retry", async () => {
+      const calls = spotify([502, 502, 502, 502, 502]);
+      const sp = client({ delaysMs: [5, 5, 5], budgetMs: 7, fallbackMs: 1 });
       await expect(sp.getMe()).rejects.toMatchObject({ status: 502 }); // one 5 ms retry; the next would pass 7 ms
       expect(calls).toHaveLength(2);
-      await expect(sp.getMe()).rejects.toMatchObject({ status: 502 }); // nothing left: fails at once
-      expect(calls).toHaveLength(3);
+      await expect(sp.getMe()).rejects.toMatchObject({ status: 502 }); // budget spent: one 1 ms retry, no more
+      expect(calls).toHaveLength(4);
+      expect(await sp.getMe()).toEqual({ id: "me" }); // a lone blip after the budget: the quick retry rescues it
+      expect(calls).toHaveLength(6);
     });
 
     it("doesn't retry a 4xx", async () => {
       const calls = spotify([404]);
-      await expect(client({ delaysMs: [1], budgetMs: Infinity }).getMe()).rejects.toMatchObject({ status: 404 });
+      await expect(client({ delaysMs: [1], budgetMs: Infinity, fallbackMs: 1 }).getMe()).rejects.toMatchObject({ status: 404 });
       expect(calls).toHaveLength(1);
     });
   });

@@ -12,7 +12,7 @@ import { runHindiFavorites } from "../../src/jobs/hindi-favorites";
 import { runHistoryPlaylists } from "../../src/jobs/history-playlists";
 import { runSync, runSyncFull } from "../../src/jobs/sync";
 import { alertConfig, editorConfig, emailConfig, importLegacyConfig, LEGACY_IMPORTED_KEY, withJob } from "../../src/runtime";
-import { DAILY_CRON, runScheduled, SYNC_CRON } from "../../src/schedule";
+import { DAILY_CRON, retryFor, runScheduled, SYNC_CRON } from "../../src/schedule";
 import { loadSettings, resolveSettings, withoutLegacyVars, type SettingValues } from "../../src/settings";
 import { DAILY_RETRY, QUICK_RETRY, SpotifyClient } from "../../src/spotify/client";
 import { mockSpotify, resetDb, type Call } from "../parity/spotify-fixture";
@@ -128,10 +128,14 @@ describe("withJob", () => {
     ]);
   });
 
-  it("daily jobs wait out a Spotify outage; the 10-minute sync keeps the quick retry", async () => {
-    expect(await withJob(testEnv(), "artist-playlists", async (_c, _db, sp) => sp.retry)).toBe(DAILY_RETRY);
-    expect(await withJob(testEnv(), "weekly-digest", async (_c, _db, sp) => sp.retry)).toBe(DAILY_RETRY);
-    expect(await withJob(testEnv(), "sync", async (_c, _db, sp) => sp.retry)).toBe(QUICK_RETRY);
+  it("gives the job's Spotify client the quick 5xx retry unless told otherwise", async () => {
+    expect(await withJob(testEnv(), "artist-playlists", async (_c, _db, sp) => sp.retry)).toBe(QUICK_RETRY);
+    expect(await withJob(testEnv(), "artist-playlists", async (_c, _db, sp) => sp.retry, DAILY_RETRY)).toBe(DAILY_RETRY);
+  });
+
+  it("the daily crons' jobs wait out a Spotify outage; the 10-minute sync keeps the quick retry", () => {
+    expect(retryFor(SYNC_CRON)).toBe(QUICK_RETRY);
+    for (const cron of [DAILY_CRON, "0 3 * * *", "10 3 * * *", "0 4 * * *", "10 4 * * *"]) expect(retryFor(cron)).toBe(DAILY_RETRY);
   });
 
   it("email, alert and editor configs follow the settings", () => {
