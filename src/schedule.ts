@@ -18,6 +18,7 @@ import { runHistoryPlaylists } from "./jobs/history-playlists";
 import { runHolidayPlaylist } from "./jobs/holiday-playlist";
 import { runSync } from "./jobs/sync";
 import { DISABLED, editorConfig, emailConfig, importLegacyOnce, migrateOnce, quietly, withJob, type Job } from "./runtime";
+import { DAILY_RETRY, QUICK_RETRY, type RetryPolicy } from "./spotify/client";
 
 export const SYNC_CRON = "*/10 * * * *";
 /** Daily at 08:05 UTC (00:05 PST / 01:05 PDT, just after US Pacific midnight): history, holiday, digests. */
@@ -27,6 +28,12 @@ const DAY_MS = 86_400_000;
 /** The activity log keeps 90 days. */
 export const ACTIVITY_DAYS = 90;
 const REFRESH_TOKEN_KEY = "spotify_refresh_token";
+
+/**
+ * How a cron's jobs retry a Spotify 5xx: the 10-minute sync's next run is its real retry; every
+ * other cron runs once a day, so its jobs wait out a short outage.
+ */
+export const retryFor = (cron: string): RetryPolicy => (cron === SYNC_CRON ? QUICK_RETRY : DAILY_RETRY);
 
 /** The jobs for one cron, each switched by its setting; null for an unknown cron. */
 function jobsFor(cron: string, env: Env): Array<[string, Job]> | null {
@@ -83,7 +90,7 @@ export async function runScheduled(cron: string, env: Env, _ctx: ExecutionContex
   let failure: unknown;
   for (const [job, fn] of jobs) {
     try {
-      await withJob(env, job, fn);
+      await withJob(env, job, fn, retryFor(cron));
     } catch (err) {
       failure ??= err;
     }

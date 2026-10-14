@@ -23,17 +23,20 @@ const MAX_RETRY_AFTER_S = 30;
 export interface RetryPolicy {
   /** The wait before each retry, one entry per retry. */
   delaysMs: readonly number[];
-  /** The most this client waits across all its retries; past it, a 5xx fails at once. */
+  /** The most this client waits on those delays, across all its requests. */
   budgetMs: number;
+  /** Past the budget, a request still gets one retry after this wait. */
+  fallbackMs: number;
 }
 
 /** The default (dashboard requests, the import Workflow, scripts) and the 10-minute sync, whose next run is the real retry. */
-export const QUICK_RETRY: RetryPolicy = { delaysMs: [1_000], budgetMs: Infinity };
+export const QUICK_RETRY: RetryPolicy = { delaysMs: [1_000], budgetMs: Infinity, fallbackMs: 1_000 };
 /**
  * Daily jobs get one run a day, so they wait out a short outage: about 1.5 min per request, at
- * most 2 min per job (the daily cron runs four jobs in one 15-minute invocation).
+ * most 2 min per job (the daily cron runs four jobs in one 15-minute invocation), then one 1 s
+ * retry per request, like QUICK_RETRY.
  */
-export const DAILY_RETRY: RetryPolicy = { delaysMs: [5_000, 30_000, 60_000], budgetMs: 120_000 };
+export const DAILY_RETRY: RetryPolicy = { delaysMs: [5_000, 30_000, 60_000], budgetMs: 120_000, fallbackMs: 1_000 };
 
 export interface SpotifyAction {
   action: "addToPlaylist" | "replacePlaylistItems" | "addToLikedSongs" | "createPlaylist" | "unfollowPlaylist";
@@ -155,9 +158,12 @@ export class SpotifyClient {
     // A POST (add tracks, create a playlist) isn't idempotent: a 5xx after Spotify applied it would
     // add the tracks or the playlist again on each retry, so it keeps the single retry it always had.
     const delay = method === "POST" && retries >= 1 ? undefined : this.retry.delaysMs[retries];
-    if (delay === undefined || this.retryWaitMs + delay > this.retry.budgetMs) return null;
-    this.retryWaitMs += delay;
-    return delay;
+    if (delay === undefined) return null;
+    if (this.retryWaitMs + delay <= this.retry.budgetMs) {
+      this.retryWaitMs += delay;
+      return delay;
+    }
+    return retries === 0 ? this.retry.fallbackMs : null; // budget spent: every request still gets one quick retry
   }
 
   private async get<T>(path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<T> {
