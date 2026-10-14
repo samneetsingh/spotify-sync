@@ -36,13 +36,13 @@ function LandingBody({ state }: { state: LandingState }) {
     return (
       <>
         <Mark />
-        <p class="lead">We emailed a setup link to the owner. Open it to connect Spotify and finish setting up.</p>
+        <p class="lead">A setup link is on its way to the owner's email. Open it to connect Spotify and finish setting up.</p>
         <form method="post" action="/claim/resend">
           <button type="submit" class="btn btn-secondary">
             Resend the setup link
           </button>
         </form>
-        <p class="note">The email can take up to 10 minutes to arrive. Check the spam folder too. The link works once, for 7 days.</p>
+        <p class="note">It can take up to 10 minutes to arrive, so check the spam folder too. The link works once, for 7 days.</p>
       </>
     );
   }
